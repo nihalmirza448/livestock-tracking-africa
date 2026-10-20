@@ -6,7 +6,7 @@ source='osm_provisional' so they can be told apart and removed.
 
 import requests
 
-OVERPASS = "https://overpass-api.de/api/interpreter"
+OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]
 
 KIND_BY_TAG = [
     (("man_made", "water_well"), "well"),
@@ -40,10 +40,17 @@ def main(store, area_id="south_kordofan"):
       node["man_made"="water_well"]({bbox}); node["amenity"="water_point"]({bbox});
       way["waterway"="dam"]({bbox});
     );
-    out center tags;
+    out center;
     """
-    r = requests.post(OVERPASS, data={"data": query}, timeout=300)
-    r.raise_for_status()
+    errors = []
+    for url in OVERPASS:
+        r = requests.post(url, data={"data": query}, timeout=300,
+                          headers={"User-Agent": "slewcis-ingest/1.0 (water point seed)"})
+        if r.ok:
+            break
+        errors.append(f"{url} -> {r.status_code}: {r.text[:300]}")
+    else:
+        raise RuntimeError("Overpass failed: " + " | ".join(errors))
     rows = []
     for el in r.json().get("elements", []):
         lat = el.get("lat") or el.get("center", {}).get("lat")
