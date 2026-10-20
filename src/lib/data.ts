@@ -57,6 +57,7 @@ export type PilotArea = {
   min_lat: number;
   max_lon: number;
   max_lat: number;
+  boundary_geojson: unknown | null;
 };
 
 const supabase = () => createPublicClient();
@@ -92,7 +93,7 @@ export async function getSources() {
 export async function getArea(): Promise<PilotArea> {
   const { data, error } = await supabase()
     .from("pilot_areas")
-    .select("id, name_en, name_ar, min_lon, min_lat, max_lon, max_lat")
+    .select("id, name_en, name_ar, min_lon, min_lat, max_lon, max_lat, boundary_geojson")
     .eq("id", AREA_ID)
     .single();
   if (error) throw error;

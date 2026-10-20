@@ -40,3 +40,8 @@ body {
   color: var(--foreground);
   font-family: system-ui, "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
 }
+
+/* Keep raster cells crisp when Leaflet scales the overlay. */
+.pixelated {
+  image-rendering: pixelated;
+}

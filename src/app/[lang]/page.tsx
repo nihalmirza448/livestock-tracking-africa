@@ -1,4 +1,4 @@
-import { AreaMapLoader } from "@/components/AreaMapLoader";
+import { IndicatorMapLoader } from "@/components/IndicatorMapLoader";
 import { Sparkline } from "@/components/Sparkline";
 import { NotConfigured } from "@/components/NotConfigured";
 import { INDICATORS, ageDays, isConfigured, getArea, getSeries, getSources, type Indicator } from "@/lib/data";
@@ -30,15 +30,16 @@ export default async function Overview({ params }: { params: Promise<{ lang: str
 
   return (
     <div className="space-y-6">
-      <section className="grid gap-4 md:grid-cols-3">
-        <div className="md:col-span-1">
-          <div className="text-xs text-subtle">{m.pilotArea}</div>
-          <h1 className="text-2xl font-semibold">{lang === "ar" ? area.name_ar : area.name_en}</h1>
-          <p className="mt-2 text-sm text-subtle">{m.boundaryNote}</p>
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <div>
+            <div className="text-xs text-subtle">{m.pilotArea}</div>
+            <h1 className="text-2xl font-semibold">{lang === "ar" ? area.name_ar : area.name_en}</h1>
+          </div>
+          <p className="text-sm text-subtle">{area.boundary_geojson ? m.officialBoundary : m.boundaryNote}</p>
         </div>
-        <div className="md:col-span-2">
-          <AreaMapLoader area={area} />
-        </div>
+        <IndicatorMapLoader area={area} lang={lang} m={m}
+          sourceNames={Object.fromEntries(sources.map((s) => [s.key, s.name]))} />
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
