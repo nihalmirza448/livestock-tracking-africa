@@ -24,12 +24,31 @@ from .geo import bounds, grid_stats, masked_stats, rows_from_stats, sinusoidal_l
 def _search(source, area, since, until):
     import earthaccess
 
-    return earthaccess.search_data(
-        short_name=source["product"],
-        version=source["product_version"],
-        temporal=(since.isoformat(), until.isoformat()),
-        bounding_box=bounds(area),
-    )
+    # Searching needs no login; logging in first attaches a token, and a bad
+    # token makes CMR answer with a bare internal error.
+    try:
+        return earthaccess.search_data(
+            short_name=source["product"],
+            version=source["product_version"],
+            temporal=(since.isoformat(), until.isoformat()),
+            bounding_box=bounds(area),
+        )
+    except Exception as e:
+        raise RuntimeError(f"CMR search for {source['product']} v{source['product_version']} failed: {e}") from e
+
+
+_logged_in = False
+
+
+def _login():
+    global _logged_in
+    if not _logged_in:
+        import earthaccess
+
+        auth = earthaccess.login(strategy="environment")
+        if not auth or not auth.authenticated:
+            raise RuntimeError("Earthdata login failed: check EARTHDATA_USERNAME / EARTHDATA_PASSWORD")
+        _logged_in = True
 
 
 def _granule_dates(g):
@@ -43,7 +62,14 @@ def _granule_dates(g):
 def _download(granules, workdir):
     import earthaccess
 
-    return earthaccess.download(granules, workdir, show_progress=False)
+    _login()
+    paths = earthaccess.download(granules, workdir, show_progress=False)
+    if len(paths) < len(granules):
+        raise RuntimeError(
+            f"Downloaded {len(paths)} of {len(granules)} files. If this is GES DISC data, approve "
+            "'NASA GESDISC DATA ARCHIVE' under Authorized Apps in your Earthdata profile."
+        )
+    return paths
 
 
 def _provenance(source, g=None, steps=()):
@@ -96,7 +122,11 @@ def chirps(source, area, since, until, skip, workdir):
     from rasterio.errors import RasterioIOError
     from rasterio.windows import from_bounds
 
+    import requests
+
     west, south, east, north = bounds(area)
+    found = missing = 0
+    last_missing = None
     d = since
     while d <= until:
         if d not in skip:
@@ -109,8 +139,11 @@ def chirps(source, area, since, until, skip, workdir):
                     lats = src.transform.f + rows_idx * src.transform.e
                     stats = masked_stats(data, np.broadcast_to(lats[:, None], data.shape), fill=src.nodata)
             except RasterioIOError:
+                missing += 1
+                last_missing = url
                 d += timedelta(days=1)
                 continue  # not published yet
+            found += 1
             stats.pop("min")
             yield d, rows_from_stats(stats, d, "precipitation", "mm/day", {
                 "product": source["product"], "version": source["product_version"],
@@ -118,6 +151,11 @@ def chirps(source, area, since, until, skip, workdir):
                 "steps": ["window read bbox+buffer", "cos-lat weighted mean"],
             })
         d += timedelta(days=1)
+    if missing and not found:
+        # Every day missing means the path is wrong or the product stopped, not latency.
+        http = last_missing.removeprefix("/vsicurl/")
+        status = requests.head(http, timeout=30, allow_redirects=True).status_code if http.startswith("http") else "n/a"
+        raise RuntimeError(f"No CHIRPS files for {since}..{until}; last tried {http} -> HTTP {status}")
 
 
 # ---------------------------------------------------------------------------

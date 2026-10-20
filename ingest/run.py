@@ -20,7 +20,7 @@ from .store import Store
 
 def run_source(store, key, area, since_override, runner):
     source = store.source(key)
-    adapter, lookback, needs_earthdata = ADAPTERS[key]
+    adapter, lookback, _ = ADAPTERS[key]
     run_id = store.start_run(key, runner)
     until = date.today()
     since = since_override or (until - timedelta(days=lookback) if lookback else date(1990, 1, 1))
@@ -33,10 +33,6 @@ def run_source(store, key, area, since_override, runner):
         if source["auth"] == "cds" and not os.environ.get("CDS_API_KEY"):
             store.finish_run(run_id, "skipped", 0, 0, "CDS_API_KEY not configured")
             return True
-        if needs_earthdata:
-            import earthaccess
-
-            earthaccess.login(strategy="environment")
         version_id = store.dataset_version(key, source["product_version"])
         skip = store.stored_dates(key, area["id"], since)
         with tempfile.TemporaryDirectory() as workdir:
