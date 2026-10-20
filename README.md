@@ -21,7 +21,7 @@ latest data and last run.
 | --- | --- | --- | --- | --- |
 | `gpm_imerg` | GPM IMERG Late daily (GPM_3IMERGDL v07) | precipitation | GES DISC directory listing | Earthdata |
 | `chirps3` | CHIRPS v3.0 daily, `sat` disaggregation (fallback rainfall) | precipitation | CHC directory listing (final, then prelim) | none |
-| `gldas_clsm` | GLDAS-2.2 CLSM daily (GLDAS_CLSM025_DA1_D) | surface and root-zone soil moisture, groundwater, air temperature | GES DISC directory listing | Earthdata |
+| `gldas_clsm` | GLDAS-2.2 CLSM daily (GLDAS_CLSM025_DA1_D) | surface and root-zone soil moisture, groundwater, total water storage, land surface temperature | GES DISC directory listing | Earthdata |
 | `grace_mascon` | GRACE/GRACE-FO JPL mascon RL06.3 | water storage anomaly | CMR search + earthaccess | Earthdata |
 | `modis_ndvi` | MOD13C1 v061 (0.05°, 16-day) | NDVI | LAADS archive listing | Earthdata |
 | `modis_et` | MOD16A2 v061 (500 m, 8-day) | evapotranspiration | LAADS archive listing | Earthdata |
@@ -40,8 +40,8 @@ Every stored value is an area statistic (cos-latitude weighted mean, min, max, v
 fraction) for the pilot area plus its buffer. Each value records its dataset version, its
 ingest run and the processing steps in `processing`.
 
-Where the concept note's datasets are out of date, the replacements are: CFSR → GLDAS air
-temperature, MODIS ET 2000–2010 → MOD16A2 v061, CCI 1992–2015 → C3S v2.1.1 (to 2022), and
+Where the concept note's datasets are out of date, the replacements are: CFSR → still open
+(GLDAS CLSM-DA carries no air temperature; land surface temperature is stored meanwhile), MODIS ET 2000–2010 → MOD16A2 v061, CCI 1992–2015 → C3S v2.1.1 (to 2022), and
 HWSD v1.2 → v2.0. The HDX, GitHub, Jupyter, CUAHSI/HydroShare and Box links in the concept
 note are places to publish results, not data sources, so they aren't ingested.
 
