@@ -60,6 +60,13 @@ const dict = {
     cadence_16day: "Updated every 16 days",
     cadence_monthly: "Updated monthly",
     cadence_static: "Static reference layer",
+    basemap: "Base map",
+    basemap_satellite: "Satellite",
+    basemap_daily: "Daily satellite (NASA, this date)",
+    basemap_streets: "Streets",
+    labels: "Labels",
+    showData: "Show indicator",
+    zoomHint: "Scroll or pinch to zoom in on the ground",
   },
   ar: {
     appName: "SLEWCIS",
@@ -115,6 +122,13 @@ const dict = {
     cadence_16day: "يُحدَّث كل 16 يومًا",
     cadence_monthly: "يُحدَّث شهريًا",
     cadence_static: "طبقة مرجعية ثابتة",
+    basemap: "خريطة الأساس",
+    basemap_satellite: "صور الأقمار الاصطناعية",
+    basemap_daily: "صورة يومية (ناسا، هذا التاريخ)",
+    basemap_streets: "الشوارع",
+    labels: "الأسماء",
+    showData: "إظهار المؤشر",
+    zoomHint: "مرّر أو اقرص للتقريب على الأرض",
   },
 } as const;
 

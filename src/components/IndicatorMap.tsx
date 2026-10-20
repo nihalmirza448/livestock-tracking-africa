@@ -13,6 +13,21 @@ type Props = { area: PilotArea; lang: Locale; m: Messages; sourceNames: Record<s
 
 const PX = 4; // image pixels per cell edge
 
+type Basemap = "satellite" | "daily" | "streets";
+
+// Esri World Imagery: high-resolution imagery where ground objects are visible.
+const ESRI_IMAGERY = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+const ESRI_IMAGERY_ATTR = "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community";
+// Esri reference layer: borders and place names, drawn on top of imagery.
+const ESRI_LABELS = "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}";
+// NASA GIBS: VIIRS true-colour imagery for a given day (250 m, available since 2015-11-24).
+const GIBS_FIRST = "2015-11-24";
+const gibsUrl = (date: string) =>
+  `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+const GIBS_ATTR = "Imagery &copy; NASA EOSDIS GIBS (VIIRS SNPP true colour)";
+const OSM = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+
 const merc = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 const invMerc = (y: number) => ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
 
@@ -71,7 +86,10 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
   const [res, setRes] = useState<GridResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [opacity, setOpacity] = useState(0.75);
+  const [opacity, setOpacity] = useState(0.55);
+  const [basemap, setBasemap] = useState<Basemap>("satellite");
+  const [labels, setLabels] = useState(true);
+  const [showData, setShowData] = useState(true);
   const [probe, setProbe] = useState<{ lat: number; lng: number; v: number | null | undefined } | null>(null);
   const layer = LAYERS.find((l) => l.id === layerId)!;
 
@@ -97,6 +115,10 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
   const boundary = area.boundary_geojson as Feature | null;
   const cadenceKey = `cadence_${layer.cadence.replace("-", "")}` as keyof Messages;
 
+  const today = new Date().toISOString().slice(0, 10);
+  // Daily imagery for the selected date, clamped to the period GIBS covers.
+  const imageryDate = res && res.date >= GIBS_FIRST ? (res.date > today ? today : res.date) : today;
+
   const onMove = (e: LeafletMouseEvent | null) => {
     if (!e || !res) return setProbe(null);
     setProbe({ lat: e.latlng.lat, lng: e.latlng.lng, v: cellValue(res, e.latlng.lat, e.latlng.lng) });
@@ -119,17 +141,39 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 py-1.5 border-b border-line text-xs">
+        <span className="text-subtle">{m.basemap}:</span>
+        {(["satellite", "daily", "streets"] as Basemap[]).map((b) => (
+          <label key={b} className="flex items-center gap-1">
+            <input type="radio" name="basemap" checked={basemap === b} onChange={() => setBasemap(b)} className="accent-accent" />
+            {m[`basemap_${b}` as keyof Messages]}
+            {b === "daily" && basemap === "daily" && <span className="text-subtle tabular-nums">({imageryDate})</span>}
+          </label>
+        ))}
+        <label className="flex items-center gap-1 ms-auto">
+          <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} className="accent-accent" disabled={basemap === "streets"} />
+          {m.labels}
+        </label>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={showData} onChange={(e) => setShowData(e.target.checked)} className="accent-accent" />
+          {m.showData}
+        </label>
+        <span className="text-subtle hidden sm:inline">{m.zoomHint}</span>
+      </div>
+
       <div className="relative">
-        <MapContainer bounds={bbox} boundsOptions={{ padding: [16, 16] }} scrollWheelZoom={false} className="h-[28rem] w-full">
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {image && <ImageOverlay url={image.url} bounds={image.bounds} opacity={opacity} className="pixelated" />}
+        <MapContainer bounds={bbox} boundsOptions={{ padding: [16, 16] }} scrollWheelZoom className="h-[34rem] w-full">
+          {basemap === "satellite" && <TileLayer key="esri" attribution={ESRI_IMAGERY_ATTR} url={ESRI_IMAGERY} maxZoom={19} />}
+          {basemap === "daily" && (
+            <TileLayer key={`gibs-${imageryDate}`} attribution={GIBS_ATTR} url={gibsUrl(imageryDate)} maxNativeZoom={9} maxZoom={14} />
+          )}
+          {basemap === "streets" && <TileLayer key="osm" attribution={OSM_ATTR} url={OSM} maxZoom={19} />}
+          {image && showData && <ImageOverlay url={image.url} bounds={image.bounds} opacity={opacity} className="pixelated" zIndex={300} />}
+          {labels && basemap !== "streets" && <TileLayer key="labels" url={ESRI_LABELS} maxZoom={19} zIndex={400} />}
           {boundary ? (
-            <GeoJSON data={boundary} style={{ color: "#1c1917", weight: 2, fill: false, dashArray: undefined }} />
+            <GeoJSON key={basemap} data={boundary} style={{ color: basemap === "streets" ? "#1c1917" : "#ffffff", weight: 2.5, opacity: 0.9, fill: false }} />
           ) : (
-            <Rectangle bounds={bbox} pathOptions={{ color: "#1c1917", weight: 1.5, fill: false, dashArray: "6 4" }} />
+            <Rectangle bounds={bbox} pathOptions={{ color: basemap === "streets" ? "#1c1917" : "#ffffff", weight: 1.5, fill: false, dashArray: "6 4" }} />
           )}
           <Probe onMove={onMove} onClick={onMove} />
         </MapContainer>
