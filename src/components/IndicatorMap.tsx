@@ -185,7 +185,7 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
       </div>
 
       <div className="relative">
-        <MapContainer bounds={bbox} boundsOptions={{ padding: [16, 16] }} scrollWheelZoom className="h-[34rem] w-full">
+        <MapContainer bounds={bbox} boundsOptions={{ padding: [16, 16] }} scrollWheelZoom preferCanvas className="h-[34rem] w-full">
           {basemap === "satellite" && <TileLayer key="esri" attribution={ESRI_IMAGERY_ATTR} url={ESRI_IMAGERY} maxZoom={19} />}
           {basemap === "daily" && (
             <TileLayer key={`gibs-${imageryDate}`} attribution={GIBS_ATTR} url={gibsUrl(imageryDate)} maxNativeZoom={9} maxZoom={14} />
