@@ -82,6 +82,13 @@ def main():
     if unknown:
         sys.exit(f"Unknown sources: {', '.join(sorted(unknown))}")
 
+    required = ["SUPABASE_URL", "SUPABASE_SECRET_KEY"]
+    if any(ADAPTERS[k][2] for k in keys):
+        required += ["EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"]
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        sys.exit(f"Missing settings: {', '.join(missing)}. Add them as GitHub Actions repository secrets.")
+
     store = Store()
     area = store.area(args.area)
     runner = os.environ.get("GITHUB_RUN_ID", "local")
