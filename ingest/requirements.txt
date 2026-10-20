@@ -1,0 +1,9 @@
+earthaccess==0.14.0
+xarray==2025.6.1
+netCDF4==1.7.2
+h5netcdf==1.6.1
+numpy==2.2.6
+rasterio==1.4.3
+pyhdf==0.11.6
+requests==2.32.4
+cdsapi==0.7.6
