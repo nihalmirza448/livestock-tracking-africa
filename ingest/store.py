@@ -5,6 +5,7 @@ infrastructure (GitHub Actions secrets), never from the browser.
 """
 
 import os
+import time
 from datetime import date, datetime, timezone
 
 import requests
@@ -18,10 +19,21 @@ class Store:
         self.session.headers.update({"apikey": key, "Content-Type": "application/json"})
 
     def _req(self, method, path, **kw):
-        r = self.session.request(method, f"{self.base}/{path}", timeout=60, **kw)
-        if not r.ok:
-            raise RuntimeError(f"{method} {path} -> {r.status_code}: {r.text[:500]}")
-        return r.json() if r.content else None
+        # Writes are idempotent upserts, so retrying a timed-out request is safe.
+        for attempt in range(4):
+            try:
+                r = self.session.request(method, f"{self.base}/{path}", timeout=120, **kw)
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt == 3:
+                    raise
+                time.sleep(5 * 2**attempt)
+                continue
+            if r.status_code >= 500 and attempt < 3:
+                time.sleep(5 * 2**attempt)
+                continue
+            if not r.ok:
+                raise RuntimeError(f"{method} {path} -> {r.status_code}: {r.text[:500]}")
+            return r.json() if r.content else None
 
     def area(self, area_id):
         rows = self._req("GET", "pilot_areas", params={"id": f"eq.{area_id}", "select": "*"})
