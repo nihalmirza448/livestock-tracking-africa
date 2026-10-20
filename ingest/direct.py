@@ -47,10 +47,13 @@ def token():
     if _token is None:
         import earthaccess
 
-        auth = earthaccess.login(strategy="environment")
-        if not auth or not auth.authenticated:
-            raise RuntimeError("Earthdata login failed: check EARTHDATA_USERNAME / EARTHDATA_PASSWORD")
-        _token = auth.token["access_token"]
+        def login():
+            auth = earthaccess.login(strategy="environment")
+            if not auth or not auth.authenticated:
+                raise RuntimeError("Earthdata login failed: check EARTHDATA_USERNAME / EARTHDATA_PASSWORD")
+            return auth.token["access_token"]
+
+        _token = _retry(login)  # URS occasionally times out on the token call
     return _token
 
 
