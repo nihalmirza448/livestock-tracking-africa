@@ -18,7 +18,8 @@ from datetime import date, datetime, timedelta
 import numpy as np
 
 from . import direct
-from .geo import bounds, grid_stats, masked_stats, rows_from_stats, sinusoidal_latlon
+from .geo import (BinGrid, bounds, grid_row, grid_stats, masked_stats, regular_grid, rows_from_stats,
+                  sinusoidal_latlon, window_grid)
 
 
 def _provenance(source, url=None, steps=(), **extra):
@@ -36,20 +37,26 @@ def _remove(paths):
             pass
 
 
-def _window_stats(path_or_url, box, **kw):
-    """Area statistics for one band of a GeoTIFF/COG restricted to box."""
-    import rasterio
-    from rasterio.windows import from_bounds
+def _window_read(path_or_url, area, **kw):
+    """Read one band of a GeoTIFF/COG restricted to the area box.
 
-    west, south, east, north = box
+    Returns (stats, grid, data, lats_1d, lons_1d, nodata).
+    """
+    import rasterio
+    from rasterio.windows import from_bounds, transform as win_transform
+
+    west, south, east, north = bounds(area)
     with rasterio.open(path_or_url) as src:
         b = src.bounds
         win = from_bounds(max(west, b.left), max(south, b.bottom), min(east, b.right), min(north, b.top),
                           src.transform).round_offsets().round_lengths()
         data = src.read(1, window=win)
-        rows_idx = np.arange(win.row_off, win.row_off + win.height) + 0.5
-        lats = np.broadcast_to((src.transform.f + rows_idx * src.transform.e)[:, None], data.shape)
-        return masked_stats(data, lats, fill=src.nodata, **kw), data, lats, src.nodata
+        tr = win_transform(win, src.transform)
+        lats = tr.f + (np.arange(data.shape[0]) + 0.5) * tr.e
+        lons = tr.c + (np.arange(data.shape[1]) + 0.5) * tr.a
+        stats = masked_stats(data, np.broadcast_to(lats[:, None], data.shape), fill=src.nodata, **kw)
+        grid = window_grid(data, tr, src.nodata, area, **kw)
+        return stats, grid, data, lats, lons, src.nodata
 
 
 # ---------------------------------------------------------------------------
@@ -67,11 +74,13 @@ def gpm_imerg(source, area, since, until, skip, workdir):
             with xr.open_dataset(path) as ds:
                 da = ds["precipitation"].isel(time=0).transpose("lat", "lon")
                 stats = grid_stats(da.values, da["lat"].values, da["lon"].values, area)
+                grid = regular_grid(da.values, da["lat"].values, da["lon"].values, area)
         finally:
             _remove([path])
         stats.pop("min")
         yield d, rows_from_stats(stats, d, "precipitation", "mm/day",
-                                 _provenance(source, url, ["clip bbox+buffer", "cos-lat weighted mean"]))
+                                 _provenance(source, url, ["clip bbox+buffer", "cos-lat weighted mean"])) + [
+            grid_row(grid, d, "precipitation", "mm/day")]
 
 
 # ---------------------------------------------------------------------------
@@ -86,11 +95,11 @@ def chirps3(source, area, since, until, skip, workdir):
         if d in skip:
             continue
         url, kind = files[d]
-        stats, *_ = _window_stats("/vsicurl/" + url, bounds(area))
+        stats, grid, *_ = _window_read("/vsicurl/" + url, area)
         stats.pop("min")
         yield d, rows_from_stats(stats, d, "precipitation", "mm/day",
                                  _provenance(source, url, ["window read bbox+buffer", "cos-lat weighted mean"],
-                                             release=kind))
+                                             release=kind)) + [grid_row(grid, d, "precipitation", "mm/day")]
 
 
 # Legacy CHIRPS v2.0 (discontinued in favour of v3; kept for backfills of old years)
@@ -106,7 +115,7 @@ def chirps(source, area, since, until, skip, workdir):
         if d not in skip:
             url = CHIRPS_URL.format(y=d.year, m=d.month, d=d.day)
             try:
-                stats, *_ = _window_stats(url, bounds(area))
+                stats, grid, *_ = _window_read(url, area)
             except RasterioIOError:
                 d += timedelta(days=1)
                 continue
@@ -114,7 +123,8 @@ def chirps(source, area, since, until, skip, workdir):
             stats.pop("min")
             yield d, rows_from_stats(stats, d, "precipitation", "mm/day",
                                      _provenance(source, url.removeprefix("/vsicurl/"),
-                                                 ["window read bbox+buffer", "cos-lat weighted mean"]))
+                                                 ["window read bbox+buffer", "cos-lat weighted mean"])) + [
+                grid_row(grid, d, "precipitation", "mm/day")]
         d += timedelta(days=1)
     if not found and since < until - timedelta(days=7):
         raise RuntimeError(f"No CHIRPS v2 files for {since}..{until}; v2 is discontinued, use chirps3")
@@ -142,7 +152,7 @@ def gldas_clsm(source, area, since, until, skip, workdir):
         if d in skip:
             continue
         path = direct.download(url, os.path.join(workdir, os.path.basename(url)))
-        rows = []
+        rows, grids = [], []
         try:
             with xr.open_dataset(path) as ds:
                 missing = [v for v, _, _, _, req in GLDAS_VARS if req and v not in ds]
@@ -155,9 +165,11 @@ def gldas_clsm(source, area, since, until, skip, workdir):
                     stats = grid_stats(da.values, da["lat"].values, da["lon"].values, area, offset=offset)
                     rows += rows_from_stats(stats, d, var, unit,
                                             _provenance(source, url, ["clip bbox+buffer", "cos-lat weighted mean"]))
+                    grids.append(grid_row(regular_grid(da.values, da["lat"].values, da["lon"].values, area,
+                                                       offset=offset), d, var, unit))
         finally:
             _remove([path])
-        yield d, rows
+        yield d, rows + grids
 
 
 # ---------------------------------------------------------------------------
@@ -198,10 +210,13 @@ def grace_mascon(source, area, since, until, skip, workdir):
                 d = np.datetime64(t, "D").astype(object)
                 if d < since or d in skip:
                     continue
-                stats = grid_stats(da.isel(time=i).values, da["lat"].values, da["lon"].values, area)
+                field = da.isel(time=i).values
+                stats = grid_stats(field, da["lat"].values, da["lon"].values, area)
+                grid = regular_grid(field, da["lat"].values, da["lon"].values, area)
                 yield d, rows_from_stats(stats, d, "water_storage_anomaly", "cm",
                                          _provenance(source, None, ["clip bbox+buffer", "cos-lat weighted mean"],
-                                                     granule=os.path.basename(paths[0])))
+                                                     granule=os.path.basename(paths[0]))) + [
+                    grid_row(grid, d, "water_storage_anomaly", "cm")]
     finally:
         _remove(paths)
 
@@ -235,9 +250,11 @@ def modis_ndvi(source, area, since, until, skip, workdir):
         finally:
             _remove([path])
         stats = grid_stats(raw, lats, lons, area, scale=1e-4, valid_range=(-2000, 10000))
+        grid = regular_grid(raw, lats, lons, area, scale=1e-4, valid_range=(-2000, 10000))
+        end = d + timedelta(days=15)
         yield d, rows_from_stats(stats, d, "ndvi", "index",
                                  _provenance(source, urls[0], ["clip bbox+buffer", "scale 1e-4", "cos-lat weighted mean"]),
-                                 period_end=d + timedelta(days=15))
+                                 period_end=end) + [grid_row(grid, d, "ndvi", "index", period_end=end)]
 
 
 def modis_et(source, area, since, until, skip, workdir):
@@ -251,6 +268,7 @@ def modis_et(source, area, since, until, skip, workdir):
             continue
         paths = [direct.download_modis(u, os.path.join(workdir, os.path.basename(u))) for u in urls]
         values, lat_parts = [], []
+        bins = BinGrid(area)
         try:
             for p in paths:
                 m = re.search(r"\.h(\d\d)v(\d\d)\.", os.path.basename(p))
@@ -261,13 +279,17 @@ def modis_et(source, area, since, until, skip, workdir):
                 inside = (lat >= south) & (lat <= north) & (lon >= west) & (lon <= east)
                 values.append(raw[inside])
                 lat_parts.append(lat[inside])
+                good = inside & (raw >= 0) & (raw <= 32700)
+                bins.add(np.where(good, raw * 0.1, np.nan), lat, lon)
         finally:
             _remove(paths)
         stats = masked_stats(np.concatenate(values), np.concatenate(lat_parts), scale=0.1, valid_range=(0, 32700))
+        end = d + timedelta(days=7)
         yield d, rows_from_stats(stats, d, "evapotranspiration", "mm/8-day",
                                  _provenance(source, None, ["mosaic tiles", "clip bbox+buffer", "scale 0.1",
                                                             "cos-lat weighted mean"], tiles=tiles),
-                                 period_end=d + timedelta(days=7))
+                                 period_end=end) + [grid_row(bins.grid(), d, "evapotranspiration", "mm/8-day",
+                                                             period_end=end)]
 
 
 # ---------------------------------------------------------------------------
@@ -306,20 +328,24 @@ def aster_dem(source, area, since, until, skip, workdir):
         return
     box = bounds(area)
     acc = _Accumulator()
+    bins = BinGrid(area)
     n = 0
     for url in direct.aster_tiles(box):
         path = direct.download(url, os.path.join(workdir, os.path.basename(url)))
         if path is None:
             continue  # tile does not exist (sea)
         try:
-            _, data, lats, nodata = _window_stats(path, box)
-            acc.add(data, lats, data != nodata if nodata is not None else np.ones_like(data, bool))
+            _, _, data, lats, lons, nodata = _window_read(path, area)
+            valid = data != nodata if nodata is not None else np.ones_like(data, bool)
+            acc.add(data, np.broadcast_to(lats[:, None], data.shape), valid)
+            bins.add(np.where(valid, data.astype("float64"), np.nan), lats[:, None], lons[None, :])
             n += 1
         finally:
             _remove([path])
     yield ASTER_DATE, rows_from_stats(acc.stats(), ASTER_DATE, "elevation", "m",
                                       _provenance(source, None, ["mosaic 1° tiles", "clip bbox+buffer",
-                                                                 "cos-lat weighted mean"], tiles=n))
+                                                                 "cos-lat weighted mean"], tiles=n)) + [
+        grid_row(bins.grid(), ASTER_DATE, "elevation", "m", decimals=0)]
 
 
 def _class_fractions(classes, lats, d, variable_prefix, provenance, top=None, ignore=()):
@@ -388,14 +414,17 @@ def hwsd(source, area, since, until, skip, workdir):
     try:
         with zipfile.ZipFile(target) as z:
             bil = next(n for n in z.namelist() if n.lower().endswith(".bil"))
-        _, data, lats, nodata = _window_stats(f"/vsizip/{target}/{bil}", bounds(area))
-        yield HWSD_DATE, _class_fractions(data, lats, HWSD_DATE, "smu",
+        _, _, data, lats, _, nodata = _window_read(f"/vsizip/{target}/{bil}", area)
+        yield HWSD_DATE, _class_fractions(data, np.broadcast_to(lats[:, None], data.shape), HWSD_DATE, "smu",
                                           {"product": "HWSD", "version": "2.0", "url": url,
                                            "steps": ["window read bbox+buffer", "top-20 soil mapping unit fractions"]},
                                           top=20, ignore=(nodata,) if nodata is not None else ())
     finally:
         _remove([target])
 
+
+# Sources whose adapters also write a map grid per date.
+GRID_SOURCES = {"gpm_imerg", "chirps3", "chirps", "gldas_clsm", "grace_mascon", "modis_ndvi", "modis_et", "aster_dem"}
 
 # Source key -> (adapter, lookback days, needs Earthdata login)
 ADAPTERS = {

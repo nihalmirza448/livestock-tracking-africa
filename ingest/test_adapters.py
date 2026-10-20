@@ -12,7 +12,7 @@ from datetime import date
 import numpy as np
 
 from . import adapters, direct, run
-from .geo import grid_stats, sinusoidal_latlon
+from .geo import BinGrid, grid_row, grid_stats, regular_grid, sinusoidal_latlon
 
 AREA = {"id": "south_kordofan", "min_lon": 29.0, "min_lat": 9.3, "max_lon": 32.4, "max_lat": 12.7, "buffer_deg": 0.25}
 BOX = (28.75, 9.05, 32.65, 12.95)
@@ -47,6 +47,39 @@ def test_grid_stats_weights_and_clip():
     field[np.ix_(lat_in, lon_in)] = 5.0
     s = grid_stats(field, lats, lons, AREA)
     assert abs(s["mean"] - 5.0) < 1e-9 and s["valid_fraction"] == 1.0
+
+
+def test_regular_grid_flips_to_north_first_and_wraps_lons():
+    lats = np.arange(-89.875, 90, 0.25)          # ascending, like GLDAS
+    lons = np.arange(0.125, 360, 0.25)           # 0..360, like GRACE
+    field = np.broadcast_to(lats[:, None], (lats.size, lons.size)).copy()  # value == latitude
+    g = regular_grid(field, lats, lons, AREA)
+    assert g["ny"] == 16 and g["nx"] == 16 and abs(g["dx"] - 0.25) < 1e-9
+    assert g["values"][0, 0] > g["values"][-1, 0]              # first row is the northernmost
+    assert abs(g["south"] - 9.0) < 1e-9 and abs(g["west"] - 28.75) < 1e-9
+
+
+def test_bingrid_averages_samples_into_cells():
+    b = BinGrid(AREA, res=0.05)
+    assert (b.nx, b.ny) == (78, 78)
+    b.add(np.array([10.0, 30.0, np.nan]), np.array([12.93, 12.92, 12.91]), np.array([28.76, 28.77, 28.78]))
+    g = b.grid()
+    assert abs(g["values"][0, 0] - 20.0) < 1e-9 and np.isnan(g["values"][1, 1])
+    row = grid_row(g, date(2026, 1, 1), "x", "u")
+    assert row["_grid"] and row["values"][0] == 20.0 and row["values"][1] is None and len(row["values"]) == 78 * 78
+
+
+def test_adapters_emit_one_grid_per_variable():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "imerg.nc4")
+        _nc_global(p, "precipitation", 3.0, 0.1, -90, lon_first=True)
+        url = "https://x/2026/10/3B-DAY-L.MS.MRG.3IMERG.20261018-S000000-E235959.V07C.nc4"
+        direct.gesdisc_files = lambda product, since, until: [(date(2026, 10, 18), url)]
+        stub_downloads({url: p})
+        (_, rows), = adapters.gpm_imerg(src("gpm_imerg"), AREA, date(2026, 10, 10), date(2026, 10, 20), set(), d)
+        grids = [r for r in rows if r.get("_grid")]
+        assert len(grids) == 1 and grids[0]["nx"] == 39 and grids[0]["ny"] == 39
+        assert all(abs(v - 3.0) < 1e-6 for v in grids[0]["values"])
 
 
 def test_modis_tiles_for_south_kordofan():
@@ -163,7 +196,7 @@ def test_modis_et_mosaics_tiles():
         direct.laads_files = lambda product, year, doy, tiles=None: sorted(files)
         stub_downloads(files)
         (_, rows), = adapters.modis_et(src("modis_et"), AREA, date(2026, 9, 1), date(2026, 10, 20), set(), d)
-        stats = {r["stat"]: r["value"] for r in rows}
+        stats = {r["stat"]: r["value"] for r in rows if "stat" in r}
         assert stats["min"] == 10.0 and stats["max"] == 30.0  # scaled by 0.1, both tiles present
         assert rows[0]["period_end"] == "2026-09-21"
 
@@ -219,7 +252,7 @@ def test_aster_mosaics_available_tiles():
         urls = direct.aster_tiles(BOX)
         stub_downloads({u: p for u in urls if "N10E030" in u})  # every other tile 404s
         (_, rows), = adapters.aster_dem(src("aster_dem"), AREA, date(1990, 1, 1), date.today(), set(), d)
-        stats = {r["stat"]: r["value"] for r in rows}
+        stats = {r["stat"]: r["value"] for r in rows if "stat" in r}
         assert abs(stats["mean"] - 500.0) < 1e-6 and rows[0]["processing"]["tiles"] == 1
 
 
@@ -244,10 +277,14 @@ class FakeStore:
     def dataset_version(self, key, version):
         return 7
 
-    def stored_dates(self, key, area_id, since):
+    def stored_dates(self, key, area_id, since, table="eo_observations"):
         return set()
 
     def write_observations(self, rows):
+        self.rows += rows
+        return len(rows)
+
+    def write_grids(self, rows):
         self.rows += rows
         return len(rows)
 

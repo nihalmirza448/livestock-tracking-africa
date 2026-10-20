@@ -44,8 +44,8 @@ class Store:
         )
         return rows[0]["id"]
 
-    def stored_dates(self, source_key, area_id, since):
-        rows = self._req("GET", "eo_observations", params={
+    def stored_dates(self, source_key, area_id, since, table="eo_observations"):
+        rows = self._req("GET", table, params={
             "select": "obs_date",
             "source_key": f"eq.{source_key}",
             "area_id": f"eq.{area_id}",
@@ -69,6 +69,20 @@ class Store:
             "rows_written": rows_written,
             "error": error[:2000] if error else None,
         })
+
+    def write_grids(self, rows):
+        if not rows:
+            return 0
+        self._req(
+            "POST", "eo_grids",
+            params={"on_conflict": "source_key,area_id,variable,obs_date"},
+            headers={"Prefer": "resolution=merge-duplicates"},
+            json=rows,
+        )
+        return len(rows)
+
+    def update_area(self, area_id, fields):
+        self._req("PATCH", "pilot_areas", params={"id": f"eq.{area_id}"}, json=fields)
 
     def write_observations(self, rows):
         if not rows:

@@ -14,7 +14,7 @@ import tempfile
 import traceback
 from datetime import date, timedelta
 
-from .adapters import ADAPTERS
+from .adapters import ADAPTERS, GRID_SOURCES
 from .store import Store
 
 
@@ -34,7 +34,9 @@ def run_source(store, key, area, since_override, runner):
             store.finish_run(run_id, "skipped", 0, 0, "CDS_API_KEY not configured")
             return True
         version_id = store.dataset_version(key, source["product_version"])
-        skip = store.stored_dates(key, area["id"], since)
+        # Sources that produce map grids are complete only when the grid exists.
+        skip = store.stored_dates(key, area["id"], since,
+                                  table="eo_grids" if key in GRID_SOURCES else "eo_observations")
         with tempfile.TemporaryDirectory() as workdir:
             stream = adapter(source, area, since, until, skip, workdir)
             while True:
@@ -50,10 +52,12 @@ def run_source(store, key, area, since_override, runner):
                     print(f"[{key}] {traceback.format_exc()}", file=sys.stderr)
                     break
                 requested += 1
+                obs, grids = [], []
                 for r in rows:
+                    (grids if r.pop("_grid", False) else obs).append(r)
                     r.update(source_key=key, area_id=area["id"], dataset_version_id=version_id, run_id=run_id)
-                written += store.write_observations(rows)
-                print(f"[{key}] {d}: {len(rows)} rows")
+                written += store.write_observations(obs) + store.write_grids(grids)
+                print(f"[{key}] {d}: {len(obs)} rows, {len(grids)} grids")
         if failures:
             status = "partial" if written else "failed"
         else:
@@ -74,6 +78,10 @@ def main():
     args = p.parse_args()
 
     keys = args.sources.split(",") if args.sources else list(ADAPTERS)
+    if keys == ["boundary"]:
+        from .boundary import main as boundary_main
+
+        sys.exit(boundary_main(Store(), args.area))
     unknown = set(keys) - set(ADAPTERS)
     if unknown:
         sys.exit(f"Unknown sources: {', '.join(sorted(unknown))}")
