@@ -9,13 +9,20 @@ without CMR. NASA downloads authenticate with an Earthdata bearer token.
 import math
 import os
 import re
+import socket
 import time
 from datetime import date, datetime, timedelta
+from urllib.parse import urljoin, urlparse
 
 import requests
+import urllib3.util.connection as urllib3_connection
+
+# GitHub runners have no IPv6 route, and several NASA hosts publish AAAA records;
+# urllib3 then fails with "Network is unreachable". Stick to IPv4.
+urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 UA = {"User-Agent": "slewcis-ingest/1.0"}
-_session = None
+NASA_HOSTS = (".nasa.gov", ".usgs.gov", ".earthdata.nasa.gov")
 _token = None
 
 
@@ -23,28 +30,14 @@ def _retry(fn, attempts=4):
     for i in range(attempts):
         try:
             return fn()
-        except (requests.ConnectionError, requests.Timeout) as e:
+        except (requests.ConnectionError, requests.Timeout, OSError) as e:
             if i == attempts - 1:
                 raise
             time.sleep(5 * 2**i)
         except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code < 500 or i == attempts - 1:
+            if (e.response is not None and e.response.status_code < 500) or i == attempts - 1:
                 raise
             time.sleep(5 * 2**i)
-
-
-def session():
-    """requests session that follows the Earthdata (URS) redirect login."""
-    global _session
-    if _session is None:
-        u, p = os.environ.get("EARTHDATA_USERNAME"), os.environ.get("EARTHDATA_PASSWORD")
-        if not (u and p):
-            raise RuntimeError("EARTHDATA_USERNAME / EARTHDATA_PASSWORD not set")
-        s = requests.Session()
-        s.auth = (u, p)
-        s.headers.update(UA)
-        _session = s
-    return _session
 
 
 def token():
@@ -60,12 +53,37 @@ def token():
     return _token
 
 
-def list_dir(url, pattern, auth=False):
+def _is_nasa(url):
+    host = urlparse(url).hostname or ""
+    return host.endswith(NASA_HOSTS)
+
+
+def _get(url, nasa, stream=False, timeout=120, max_redirects=8):
+    """GET that follows redirects itself so the bearer token survives host changes.
+
+    requests drops Authorization on cross-host redirects, which turns an
+    archive download into the Earthdata login page.
+    """
+    headers = dict(UA)
+    for _ in range(max_redirects):
+        if nasa and _is_nasa(url):
+            headers["Authorization"] = f"Bearer {token()}"
+        else:
+            headers.pop("Authorization", None)
+        r = requests.get(url, headers=headers, stream=stream, timeout=timeout, allow_redirects=False)
+        if r.status_code in (301, 302, 303, 307, 308) and "location" in r.headers:
+            url = urljoin(url, r.headers["location"])
+            r.close()
+            continue
+        return r
+    raise RuntimeError(f"Too many redirects fetching {url}")
+
+
+def list_dir(url, pattern, nasa=False):
     """Sorted unique hrefs in an HTML directory listing that match pattern; [] on 404."""
-    s = session() if auth else requests
 
     def get():
-        r = s.get(url, timeout=120, headers=UA)
+        r = _get(url, nasa)
         if r.status_code == 404:
             return []
         r.raise_for_status()
@@ -76,18 +94,18 @@ def list_dir(url, pattern, auth=False):
 
 
 def download(url, dest, nasa=True):
-    """Stream url to dest. Fails loudly on an HTML login page instead of saving it."""
-    headers = {**UA, **({"Authorization": f"Bearer {token()}"} if nasa else {})}
+    """Stream url to dest. Returns None on 404. Fails loudly on an HTML login page."""
 
     def get():
-        with requests.get(url, headers=headers, stream=True, timeout=900, allow_redirects=True) as r:
+        with _get(url, nasa, stream=True, timeout=900) as r:
             if r.status_code == 404:
                 return None
             r.raise_for_status()
             if "text/html" in r.headers.get("content-type", ""):
                 raise RuntimeError(
-                    f"{url} returned an HTML page, not data. The archive probably needs approval "
-                    "under Authorized Apps in your Earthdata profile."
+                    f"{url} answered with an HTML page (final URL {r.url}), not data. "
+                    "Either the token was not accepted or the archive needs approval under "
+                    "Authorized Apps in your Earthdata profile."
                 )
             with open(dest, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
@@ -119,7 +137,7 @@ def gesdisc_files(product, since, until):
     root = GESDISC[product]
     for y, m in months(since, until):
         month_url = f"{root}{y}/{m:02d}/"
-        for name in list_dir(month_url, r"\.nc4$", auth=True):
+        for name in list_dir(month_url, r"\.nc4$", nasa=True):
             md = re.search(r"(?<!\d)(20\d{6})(?!\d)", name)
             if not md:
                 continue
@@ -133,11 +151,12 @@ def gesdisc_files(product, since, until):
 # ---------------------------------------------------------------------------
 
 LAADS = "https://ladsweb.modaps.eosdis.nasa.gov/archive/allData/61/"
+LPCLOUD = "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/"
 
 
 def _laads_json(url):
     def get():
-        r = requests.get(url, timeout=120, headers=UA)
+        r = _get(url, nasa=False)
         if r.status_code == 404:
             return []
         r.raise_for_status()
@@ -159,6 +178,27 @@ def laads_files(product, year, doy, tiles=None):
     if tiles:
         names = [n for n in names if any(f".{t}." in n for t in tiles)]
     return [f"{LAADS}{product}/{year}/{doy:03d}/{n}" for n in sorted(names)]
+
+
+def lpcloud_url(laads_url):
+    """Same granule on LP DAAC's cloud store: <collection>/<granule id>/<file>."""
+    name = os.path.basename(laads_url)
+    product, _, version = name.split(".")[0], None, name.split(".")[-3]
+    return f"{LPCLOUD}{product}.{version}/{name[:-4]}/{name}"
+
+
+def download_modis(url, dest):
+    """Download a MODIS granule: LAADS first, LP DAAC cloud if LAADS hands back a login page."""
+    try:
+        return download(url, dest)
+    except RuntimeError as e:
+        if "HTML page" not in str(e):
+            raise
+        alt = lpcloud_url(url)
+        path = download(alt, dest)
+        if path is None:
+            raise RuntimeError(f"LAADS returned a login page for {url} and LP DAAC cloud has no {alt}") from e
+        return path
 
 
 def doy_to_date(year, doy):
@@ -189,7 +229,7 @@ def modis_tiles(bounds, step=0.25):
 # LP DAAC cloud: ASTER GDEM tiles have deterministic names
 # ---------------------------------------------------------------------------
 
-ASTER_URL = "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/ASTGTM.003/ASTGTMV003_{ns}{lat:02d}{ew}{lon:03d}_dem.tif"
+ASTER_URL = LPCLOUD + "ASTGTM.003/ASTGTMV003_{ns}{lat:02d}{ew}{lon:03d}_dem.tif"
 
 
 def aster_tiles(bounds):

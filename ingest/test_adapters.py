@@ -31,6 +31,7 @@ def stub_downloads(files):
             shutil.copy(files[url], dest)
         return dest
     direct.download = fake
+    direct.download_modis = fake
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +61,12 @@ def test_aster_tiles_cover_box():
     urls = direct.aster_tiles(BOX)
     assert len(urls) == 4 * 5
     assert any("N09E028" in u for u in urls) and any("N12E032" in u for u in urls)
+
+
+def test_lpcloud_url_from_laads_name():
+    u = direct.lpcloud_url("https://ladsweb.modaps.eosdis.nasa.gov/archive/allData/61/MOD13C1/2026/241/MOD13C1.A2026241.061.2026258051816.hdf")
+    assert u == ("https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/MOD13C1.061/"
+                 "MOD13C1.A2026241.061.2026258051816/MOD13C1.A2026241.061.2026258051816.hdf")
 
 
 def test_gesdisc_date_regex():

@@ -218,7 +218,7 @@ def modis_ndvi(source, area, since, until, skip, workdir):
         urls = direct.laads_files("MOD13C1", year, doy)
         if not urls:
             continue
-        path = direct.download(urls[0], os.path.join(workdir, os.path.basename(urls[0])))
+        path = direct.download_modis(urls[0], os.path.join(workdir, os.path.basename(urls[0])))
         try:
             hdf = SD(path, SDC.READ)
             raw = hdf.select("CMG 0.05 Deg 16 days NDVI")[:]
@@ -240,7 +240,7 @@ def modis_et(source, area, since, until, skip, workdir):
         urls = direct.laads_files("MOD16A2", year, doy, tiles)
         if not urls:
             continue
-        paths = [direct.download(u, os.path.join(workdir, os.path.basename(u))) for u in urls]
+        paths = [direct.download_modis(u, os.path.join(workdir, os.path.basename(u))) for u in urls]
         values, lat_parts = [], []
         try:
             for p in paths:
