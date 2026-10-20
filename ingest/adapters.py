@@ -186,7 +186,9 @@ def grace_mascon(source, area, since, until, skip, workdir):
 
     granules = _cmr_search(source, area, date(2002, 4, 1), until)
     if not granules:
-        return
+        # The mascon collection always has one granule; an empty answer means CMR is unwell.
+        raise RuntimeError(f"CMR returned no granules for {source['product']}; the CMR granule index "
+                           "is likely degraded (its /health endpoint has been returning 500)")
     direct.token()  # logs in through earthaccess as a side effect
     paths = earthaccess.download(granules[-1:], workdir, show_progress=False)
     try:
