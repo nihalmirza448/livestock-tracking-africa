@@ -1,7 +1,7 @@
 // Map layers: which stored grid each one shows and how it is coloured.
 // Shared by the API route (server) and the map (client); holds no secrets.
 
-export type Cadence = "daily" | "8-day" | "16-day" | "monthly" | "static";
+export type Cadence = "daily" | "5-day" | "8-day" | "16-day" | "monthly" | "static";
 
 export type Layer = {
   id: string;
@@ -25,6 +25,7 @@ const PURPLES = ["#ede9fe", "#c4b5fd", "#a78bfa", "#7c3aed", "#5b21b6", "#2e1065
 const ORANGES = ["#ffedd5", "#fdba74", "#fb923c", "#ea580c", "#9a3412", "#431407"];
 const CYANS = ["#cffafe", "#67e8f9", "#22d3ee", "#0891b2", "#155e75", "#083344"];
 const GRAYS = ["#f5f5f4", "#d6d3d1", "#a8a29e", "#78716c", "#44403c", "#1c1917"];
+const INDIGO = ["#e0e7ff", "#a5b4fc", "#818cf8", "#4f46e5", "#3730a3", "#1e1b4b"];
 // Diverging: dry brown -> neutral gray -> wet blue.
 const DRY_WET = ["#9a3412", "#d9a066", "#e5e7eb", "#7fb3e0", "#1d4ed8"];
 
@@ -41,6 +42,8 @@ export const LAYERS: Layer[] = [
     cadence: "daily", kind: "sequential", domain: [20, 45], ramp: ORANGES, digits: 1 },
   { id: "evapotranspiration", variable: "evapotranspiration", source: "modis_et", unit: "mm / 8 days",
     cadence: "8-day", kind: "sequential", domain: [0, 40], ramp: CYANS, digits: 1 },
+  { id: "surface_water", variable: "surface_water_fraction", source: "s2_water", unit: "fraction of area",
+    cadence: "5-day", kind: "sequential", domain: [0, 1], ramp: INDIGO, digits: 2 },
   { id: "water_anomaly", variable: "water_storage_anomaly", source: "grace_mascon", unit: "cm",
     cadence: "monthly", kind: "diverging", domain: [-25, 25], ramp: DRY_WET, digits: 1 },
   { id: "elevation", variable: "elevation", source: "aster_dem", unit: "m",

@@ -2,7 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 import { useEffect, useMemo, useState } from "react";
-import { GeoJSON, ImageOverlay, MapContainer, Rectangle, TileLayer, useMapEvents } from "react-leaflet";
+import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Popup, Rectangle, TileLayer, useMapEvents } from "react-leaflet";
 import type { LatLngBoundsExpression, LeafletMouseEvent } from "leaflet";
 import type { Feature } from "geojson";
 import type { PilotArea } from "@/lib/data";
@@ -10,6 +10,13 @@ import type { Locale, Messages } from "@/lib/i18n";
 import { LAYERS, colorFor, type GridResponse, type Layer } from "@/lib/layers";
 
 type Props = { area: PilotArea; lang: Locale; m: Messages; sourceNames: Record<string, string> };
+
+type WaterPoint = {
+  id: string; name: string | null; name_ar: string | null; kind: string; source: string | null;
+  lon: number; lat: number;
+  latest: { obs_date: string; water_fraction: number | null } | null;
+  history: { obs_date: string; water_fraction: number | null }[];
+};
 
 const PX = 4; // image pixels per cell edge
 
@@ -91,6 +98,8 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
   const [labels, setLabels] = useState(true);
   const [showData, setShowData] = useState(true);
   const [probe, setProbe] = useState<{ lat: number; lng: number; v: number | null | undefined } | null>(null);
+  const [waterPoints, setWaterPoints] = useState<WaterPoint[]>([]);
+  const [showPoints, setShowPoints] = useState(true);
   const layer = LAYERS.find((l) => l.id === layerId)!;
 
   useEffect(() => {
@@ -106,7 +115,17 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
     return () => { live = false; };
   }, [layerId, date]);
 
+  useEffect(() => {
+    fetch("/api/water-points").then((r) => (r.ok ? r.json() : [])).then(setWaterPoints).catch(() => setWaterPoints([]));
+  }, []);
+
   const image = useMemo(() => (res ? render(res, layer) : null), [res, layer]);
+  const pointColor = (wp: WaterPoint) => {
+    const f = wp.latest?.water_fraction;
+    if (f === null || f === undefined) return "#9ca3af";
+    const [r, g, b] = colorFor(f, [0, 1], LAYERS.find((l) => l.id === "surface_water")!.ramp);
+    return `rgb(${r},${g},${b})`;
+  };
   const fmt = new Intl.NumberFormat(lang === "ar" ? "ar-SD" : "en", { maximumFractionDigits: layer.digits });
   const dates = res?.dates ?? [];
   const idx = res ? dates.indexOf(res.date) : -1;
@@ -158,6 +177,10 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
           <input type="checkbox" checked={showData} onChange={(e) => setShowData(e.target.checked)} className="accent-accent" />
           {m.showData}
         </label>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} className="accent-accent" />
+          {m.waterPoints} ({waterPoints.length})
+        </label>
         <span className="text-subtle hidden sm:inline">{m.zoomHint}</span>
       </div>
 
@@ -175,6 +198,28 @@ export default function IndicatorMap({ area, lang, m, sourceNames }: Props) {
           ) : (
             <Rectangle bounds={bbox} pathOptions={{ color: basemap === "streets" ? "#1c1917" : "#ffffff", weight: 1.5, fill: false, dashArray: "6 4" }} />
           )}
+          {showPoints && waterPoints.map((wp) => (
+            <CircleMarker key={wp.id} center={[wp.lat, wp.lon]} radius={6}
+              pathOptions={{ color: "#ffffff", weight: 1.5, fillColor: pointColor(wp), fillOpacity: 0.95 }}>
+              <Popup>
+                <div className="text-xs space-y-1 min-w-[10rem]">
+                  <div className="font-medium">{(lang === "ar" ? wp.name_ar : null) ?? wp.name ?? wp.kind}</div>
+                  <div className="text-subtle">{wp.kind}{wp.source === "osm_provisional" ? ` · ${m.provisionalPoints}` : ""}</div>
+                  {wp.latest && wp.latest.water_fraction !== null ? (
+                    <div>{Math.round(wp.latest.water_fraction * 100)}% {m.waterFraction} · {wp.latest.obs_date}</div>
+                  ) : <div className="text-subtle">{m.noObservation}</div>}
+                  {wp.history.length > 1 && (
+                    <div className="flex items-end gap-px h-8" aria-hidden>
+                      {wp.history.slice().reverse().map((h) => (
+                        <div key={h.obs_date} title={`${h.obs_date}: ${h.water_fraction === null ? "—" : Math.round(h.water_fraction * 100) + "%"}`}
+                          className="w-2 bg-accent" style={{ height: `${Math.max(4, (h.water_fraction ?? 0) * 100)}%`, opacity: h.water_fraction === null ? 0.2 : 0.9 }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </Popup>
+            </CircleMarker>
+          ))}
           <Probe onMove={onMove} onClick={onMove} />
         </MapContainer>
         {(loading || error) && (

@@ -32,6 +32,7 @@ export default async function RootLayout({
             </div>
             <nav className="flex gap-4 text-sm">
               <Link href={`/${lang}`} className="hover:underline">{m.overview}</Link>
+              <Link href={`/${lang}/field`} className="hover:underline">{m.field}</Link>
               <Link href={`/${lang}/sources`} className="hover:underline">{m.sources}</Link>
             </nav>
             <Link href={`/${other}`} className="ms-auto text-sm rounded border border-line px-2 py-1 hover:bg-muted">

@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta
 import numpy as np
 
 from . import direct
+from .sentinel import s2_water
 from .geo import (BinGrid, bounds, grid_row, grid_stats, masked_stats, regular_grid, rows_from_stats,
                   sinusoidal_latlon, window_grid)
 
@@ -424,7 +425,8 @@ def hwsd(source, area, since, until, skip, workdir):
 
 
 # Sources whose adapters also write a map grid per date.
-GRID_SOURCES = {"gpm_imerg", "chirps3", "chirps", "gldas_clsm", "grace_mascon", "modis_ndvi", "modis_et", "aster_dem"}
+GRID_SOURCES = {"gpm_imerg", "chirps3", "chirps", "gldas_clsm", "grace_mascon", "modis_ndvi", "modis_et", "aster_dem",
+                "s2_water"}
 
 # Source key -> (adapter, lookback days, needs Earthdata login)
 ADAPTERS = {
@@ -436,6 +438,7 @@ ADAPTERS = {
     "modis_ndvi": (modis_ndvi, 64, True),
     "modis_et": (modis_et, 48, True),
     "aster_dem": (aster_dem, 0, True),
+    "s2_water": (s2_water, 15, False),
     "cci_landcover": (cci_landcover, 0, False),
     "hwsd": (hwsd, 0, False),
 }

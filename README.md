@@ -28,6 +28,7 @@ latest data and last run.
 | `aster_dem` | ASTGTM v003 | elevation | LP DAAC cloud, deterministic tile URLs | Earthdata |
 | `cci_landcover` | C3S/ESA CCI land cover v2.1.1 | land cover class fractions | Copernicus CDS API | CDS API key |
 | `hwsd` | HWSD v2.0 raster | soil mapping unit fractions | FAO S3 | none |
+| `s2_water` | Sentinel-2 L2A, MNDWI water mask (20 m → 60 m blocks) | surface water fraction per 0.05° cell and per water point (500 m) | Copernicus Data Space OData | CDSE login |
 | `chirps` | CHIRPS v2.0 daily (discontinued Jan 2025; disabled) | precipitation | CHC | none |
 | `cfsr` | CFSR (ended 2017; disabled) | — | — | — |
 
@@ -55,8 +56,31 @@ note are places to publish results, not data sources, so they aren't ingested.
    - `EARTHDATA_USERNAME`, `EARTHDATA_PASSWORD`
    - `CDS_API_KEY` (optional, for land cover): from https://cds.climate.copernicus.eu after
      accepting the satellite-land-cover licence
+   - `CDSE_USERNAME`, `CDSE_PASSWORD` (surface water): a free account at https://dataspace.copernicus.eu
+   - `KOBO_URL`, `KOBO_TOKEN`, `KOBO_FLOW_ASSET`, `KOBO_CHECK_ASSET` (field forms): see below
 3. **First run.** Actions → *EO ingest* → *Run workflow*. Leave *sources* blank for the daily
    set, or enter e.g. `aster_dem,hwsd,grace_mascon`. To backfill, set *since*, e.g. `2025-01-01`.
+
+## Field data (enumerators)
+
+Herd counts and site checks are collected with ODK Collect against two KoboToolbox forms in
+`forms/` (`python forms/build_forms.py` regenerates them from the CSV sources; Arabic default,
+English second; constraints mirror the database checks). To go live:
+
+1. Create a free account at https://kf.kobotoolbox.org (or the humanitarian server), upload
+   `forms/flow_count.xlsx` and `forms/field_check.xlsx`, deploy both.
+2. Account → Security → create an API token. Add secrets `KOBO_TOKEN`, `KOBO_URL`
+   (`https://kf.kobotoolbox.org`), `KOBO_FLOW_ASSET` and `KOBO_CHECK_ASSET` (the asset ids in
+   each form's URL).
+3. Enumerators install ODK Collect, connect it to the Kobo server with their account, and
+   download the forms once; they then work fully offline and sync when in coverage.
+4. `kobo_sync` runs hourly, upserting by submission UUID into `flow_counts` / `field_checks`
+   and copying photos to the private `field-photos` bucket. Map each enumerator's Kobo username
+   to a platform user in `enumerator_accounts`; unmapped submissions are kept flagged
+   `pending_review`. The dashboard's *Field* page shows weekly aggregates only.
+
+Water points start as a provisional OpenStreetMap seed (`python -m ingest.run --sources
+water_points`); replace with the NIDAA/ministry list when available.
 
 ## Local development
 

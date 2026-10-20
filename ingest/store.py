@@ -93,6 +93,53 @@ class Store:
         )
         return len(rows)
 
+    def water_points(self, area_id):
+        return self._req("GET", "water_points_ll", params={"area_id": f"eq.{area_id}", "select": "id,lon,lat,kind,name"})
+
+    def upsert_water_points(self, rows):
+        self._req("POST", "water_points", params={"on_conflict": "osm_id"},
+                  headers={"Prefer": "resolution=merge-duplicates"}, json=rows)
+
+    def write_water_obs(self, rows):
+        if not rows:
+            return 0
+        self._req("POST", "water_point_observations",
+                  params={"on_conflict": "water_point_id,source_key,obs_date"},
+                  headers={"Prefer": "resolution=merge-duplicates"}, json=rows)
+        return len(rows)
+
+    def monitoring_points(self, area_id):
+        return self._req("GET", "monitoring_points", params={"area_id": f"eq.{area_id}", "select": "id,code,name"})
+
+    def enumerator_accounts(self):
+        rows = self._req("GET", "enumerator_accounts", params={"select": "kobo_username,user_id"})
+        return {r["kobo_username"]: r["user_id"] for r in rows}
+
+    def get_cursor(self, key):
+        rows = self._req("GET", "sync_cursors", params={"key": f"eq.{key}", "select": "value"})
+        return rows[0]["value"] if rows else None
+
+    def set_cursor(self, key, value):
+        self._req("POST", "sync_cursors", params={"on_conflict": "key"},
+                  headers={"Prefer": "resolution=merge-duplicates"}, json={"key": key, "value": value})
+
+    def upsert_rows(self, table, rows):
+        if rows:
+            self._req("POST", table, params={"on_conflict": "client_id"},
+                      headers={"Prefer": "resolution=merge-duplicates"}, json=rows)
+        return len(rows)
+
+    def upload_photo(self, path, content, mimetype):
+        """Store a field photo in the private field-photos bucket; returns the object path."""
+        url = os.environ["SUPABASE_URL"].rstrip("/") + f"/storage/v1/object/field-photos/{path}"
+        key = os.environ["SUPABASE_SECRET_KEY"]
+        r = requests.post(url, data=content, timeout=300,
+                          headers={"apikey": key, "Authorization": f"Bearer {key}",
+                                   "Content-Type": mimetype, "x-upsert": "true"})
+        if not r.ok:
+            raise RuntimeError(f"photo upload -> {r.status_code}: {r.text[:300]}")
+        return f"field-photos/{path}"
+
     def update_area(self, area_id, fields):
         self._req("PATCH", "pilot_areas", params={"id": f"eq.{area_id}"}, json=fields)
 

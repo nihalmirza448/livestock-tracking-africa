@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: "0 2 * * *" # 04:00 Sudan time, ahead of the 08:00 refresh target
     - cron: "0 3 1 * *" # monthly: static and annual reference layers
+    - cron: "17 * * * *" # hourly: pull enumerator submissions from KoboToolbox
   workflow_dispatch:
     inputs:
       sources:
@@ -28,8 +29,10 @@ jobs:
             list=$(echo "$INPUT_SOURCES" | tr -d ' ' | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd,)
           elif [ "$SCHEDULE" = "0 3 1 * *" ]; then
             list='"aster_dem","cci_landcover","hwsd","grace_mascon"'
+          elif [ "$SCHEDULE" = "17 * * * *" ]; then
+            list='"kobo_sync"'
           else
-            list='"gpm_imerg","chirps3","gldas_clsm","modis_ndvi","modis_et"'
+            list='"gpm_imerg","chirps3","gldas_clsm","modis_ndvi","modis_et","s2_water"'
           fi
           echo "sources=[$list]" >> "$GITHUB_OUTPUT"
           echo "Running: [$list]"
@@ -48,6 +51,12 @@ jobs:
       EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
       EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
       CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+      CDSE_USERNAME: ${{ secrets.CDSE_USERNAME }}
+      CDSE_PASSWORD: ${{ secrets.CDSE_PASSWORD }}
+      KOBO_URL: ${{ secrets.KOBO_URL }}
+      KOBO_TOKEN: ${{ secrets.KOBO_TOKEN }}
+      KOBO_FLOW_ASSET: ${{ secrets.KOBO_FLOW_ASSET }}
+      KOBO_CHECK_ASSET: ${{ secrets.KOBO_CHECK_ASSET }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

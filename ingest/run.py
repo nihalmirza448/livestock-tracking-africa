@@ -33,12 +33,16 @@ def run_source(store, key, area, since_override, runner):
         if source["auth"] == "cds" and not os.environ.get("CDS_API_KEY"):
             store.finish_run(run_id, "skipped", 0, 0, "CDS_API_KEY not configured")
             return True
+        if source["auth"] == "cdse" and not (os.environ.get("CDSE_USERNAME") and os.environ.get("CDSE_PASSWORD")):
+            store.finish_run(run_id, "skipped", 0, 0, "CDSE_USERNAME / CDSE_PASSWORD not configured")
+            return True
         version_id = store.dataset_version(key, source["product_version"])
         # Sources that produce map grids are complete only when the grid exists.
         skip = store.stored_dates(key, area["id"], since,
                                   table="eo_grids" if key in GRID_SOURCES else "eo_observations")
+        extra = {"water_points": store.water_points(area["id"])} if key == "s2_water" else {}
         with tempfile.TemporaryDirectory() as workdir:
-            stream = adapter(source, area, since, until, skip, workdir)
+            stream = adapter(source, area, since, until, skip, workdir, **extra)
             while True:
                 try:
                     d, rows = next(stream)
@@ -52,12 +56,19 @@ def run_source(store, key, area, since_override, runner):
                     print(f"[{key}] {traceback.format_exc()}", file=sys.stderr)
                     break
                 requested += 1
-                obs, grids = [], []
+                obs, grids, wps = [], [], []
                 for r in rows:
-                    (grids if r.pop("_grid", False) else obs).append(r)
+                    if r.pop("_grid", False):
+                        grids.append(r)
+                    elif r.pop("_wp", False):
+                        wps.append(r)
+                        r.update(source_key=key, run_id=run_id)
+                        continue
+                    else:
+                        obs.append(r)
                     r.update(source_key=key, area_id=area["id"], dataset_version_id=version_id, run_id=run_id)
-                written += store.write_observations(obs) + store.write_grids(grids)
-                print(f"[{key}] {d}: {len(obs)} rows, {len(grids)} grids")
+                written += store.write_observations(obs) + store.write_grids(grids) + store.write_water_obs(wps)
+                print(f"[{key}] {d}: {len(obs)} rows, {len(grids)} grids, {len(wps)} water points")
         if failures:
             status = "partial" if written else "failed"
         else:
@@ -82,6 +93,14 @@ def main():
         from .boundary import main as boundary_main
 
         sys.exit(boundary_main(Store(), args.area))
+    if keys == ["kobo_sync"]:
+        from .kobo_sync import main as kobo_main
+
+        sys.exit(kobo_main(Store(), args.area))
+    if keys == ["water_points"]:
+        from .water_points import main as wp_main
+
+        sys.exit(wp_main(Store(), args.area))
     unknown = set(keys) - set(ADAPTERS)
     if unknown:
         sys.exit(f"Unknown sources: {', '.join(sorted(unknown))}")

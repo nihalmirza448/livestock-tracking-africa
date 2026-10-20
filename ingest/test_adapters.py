@@ -288,6 +288,13 @@ class FakeStore:
         self.rows += rows
         return len(rows)
 
+    def write_water_obs(self, rows):
+        self.rows += rows
+        return len(rows)
+
+    def water_points(self, area_id):
+        return []
+
 
 def test_runner_records_partial_failure():
     def flaky(source, area, since, until, skip, workdir):
@@ -307,3 +314,54 @@ if __name__ == "__main__":
     for t in tests:
         t()
         print("ok", t.__name__)
+
+
+# ---------------------------------------------------------------------------
+# Sentinel-2 water and Kobo mapping
+# ---------------------------------------------------------------------------
+
+def test_water_blocks_mndwi_and_cloud_mask():
+    from . import sentinel
+
+    green = np.full((6, 6), 1000, "uint16")
+    swir = np.full((6, 6), 2000, "uint16")       # dry everywhere
+    swir[:3, :3] = 200                            # top-left block is water
+    scl = np.full((6, 6), 4, "uint8")
+    scl[3:, 3:] = 9                               # bottom-right block is cloud
+    frac = sentinel.water_blocks(green, swir, scl)
+    assert frac.shape == (2, 2)
+    assert frac[0, 0] == 1.0 and frac[0, 1] == 0.0 and frac[1, 0] == 0.0 and np.isnan(frac[1, 1])
+
+
+def test_point_fraction_buffer():
+    from . import sentinel
+
+    frac = np.array([[1.0, np.nan], [0.0, 0.0]], "float32")
+    x = np.array([[0.0, 60.0], [0.0, 60.0]])
+    y = np.array([[60.0, 60.0], [0.0, 0.0]])
+    f, valid, n = sentinel.point_fraction(frac, x, y, 30.0, 30.0)
+    assert n == 4 and abs(f - (1 / 3)) < 1e-6 and abs(valid - 0.75) < 1e-6
+    assert sentinel.point_fraction(frac, x, y, 5000.0, 5000.0) is None
+
+
+def test_kobo_flow_mapping_flags_unknown_user():
+    from . import kobo_sync
+
+    sub = {"_uuid": "u1", "_submitted_by": "ahmed", "_submission_time": "2026-10-20T08:00:00",
+           "monitoring_point": "KAD", "species": "cattle", "head_count": "120", "direction": "south"}
+    row, why = kobo_sync.map_flow(sub, {"KAD": "mp-1"}, {})
+    assert why is None and row["client_id"] == "u1" and row["head_count"] == 120
+    assert row["pending_review"] is True and row["enumerator_id"] is None
+    row, why = kobo_sync.map_flow({**sub, "monitoring_point": "XXX"}, {"KAD": "mp-1"}, {})
+    assert row is None and "XXX" in why
+    chk, _ = kobo_sync.map_check({"_uuid": "u2", "_submitted_by": "ahmed", "location": "11.01 29.72 500 5",
+                                  "pasture_condition": "3", "route_condition": "open"}, "south_kordofan", {"ahmed": "user-9"})
+    assert chk["geom"] == "SRID=4326;POINT(29.72 11.01)" and chk["pending_review"] is False
+
+
+def test_osm_kind_classification():
+    from . import water_points
+
+    assert water_points.classify({"man_made": "water_well"}) == "well"
+    assert water_points.classify({"natural": "water", "water": "reservoir"}) == "dam"
+    assert water_points.classify({"natural": "water"}) == "pond"
