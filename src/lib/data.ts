@@ -13,7 +13,7 @@ export type Indicator = {
 
 // What the conditions view shows, in order. Sources are keys in data_sources.
 export const INDICATORS: Indicator[] = [
-  { variable: "precipitation", source: "gpm_imerg", fallback: "chirps", maxAgeDays: 3, digits: 1 },
+  { variable: "precipitation", source: "gpm_imerg", fallback: "chirps3", maxAgeDays: 3, digits: 1 },
   { variable: "ndvi", source: "modis_ndvi", maxAgeDays: 40, digits: 3 },
   { variable: "soil_moisture_rootzone", source: "gldas_clsm", maxAgeDays: 120, digits: 0 },
   { variable: "groundwater_storage", source: "gldas_clsm", maxAgeDays: 120, digits: 0 },

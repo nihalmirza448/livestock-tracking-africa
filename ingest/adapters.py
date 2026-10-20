@@ -3,6 +3,9 @@
 Each adapter yields (obs_date, rows) pairs for dates not already stored. Rows
 are area statistics; the runner adds source, area, version and run ids.
 Adding a source means adding an adapter here and a row in data_sources.
+
+NASA daily products are found through the archives' own listings (see direct.py)
+because the CMR search service has been unreliable. GRACE still uses CMR.
 """
 
 import glob
@@ -14,76 +17,15 @@ from datetime import date, datetime, timedelta
 
 import numpy as np
 
+from . import direct
 from .geo import bounds, grid_stats, masked_stats, rows_from_stats, sinusoidal_latlon
 
 
-# ---------------------------------------------------------------------------
-# NASA Earthdata helpers
-# ---------------------------------------------------------------------------
-
-def _search(source, area, since, until):
-    import earthaccess
-
-    # Searching needs no login; logging in first attaches a token, and a bad
-    # token makes CMR answer with a bare internal error. 5xx errors are retried.
-    import time
-
-    for attempt in range(4):
-        try:
-            return earthaccess.search_data(
-                short_name=source["product"],
-                version=source["product_version"],
-                temporal=(since.isoformat(), until.isoformat()),
-                bounding_box=bounds(area),
-            )
-        except Exception as e:
-            if attempt == 3:
-                raise RuntimeError(
-                    f"CMR search for {source['product']} v{source['product_version']} failed: {e}"
-                ) from e
-            time.sleep(10 * 2**attempt)
-
-
-_logged_in = False
-
-
-def _login():
-    global _logged_in
-    if not _logged_in:
-        import earthaccess
-
-        auth = earthaccess.login(strategy="environment")
-        if not auth or not auth.authenticated:
-            raise RuntimeError("Earthdata login failed: check EARTHDATA_USERNAME / EARTHDATA_PASSWORD")
-        _logged_in = True
-
-
-def _granule_dates(g):
-    rng = g["umm"]["TemporalExtent"]["RangeDateTime"]
-    start = datetime.fromisoformat(rng["BeginningDateTime"].replace("Z", "+00:00")).date()
-    end = rng.get("EndingDateTime")
-    end = datetime.fromisoformat(end.replace("Z", "+00:00")).date() if end else None
-    return start, end
-
-
-def _download(granules, workdir):
-    import earthaccess
-
-    _login()
-    paths = earthaccess.download(granules, workdir, show_progress=False)
-    if len(paths) < len(granules):
-        raise RuntimeError(
-            f"Downloaded {len(paths)} of {len(granules)} files. If this is GES DISC data, approve "
-            "'NASA GESDISC DATA ARCHIVE' under Authorized Apps in your Earthdata profile."
-        )
-    return paths
-
-
-def _provenance(source, g=None, steps=()):
+def _provenance(source, url=None, steps=(), **extra):
     p = {"product": source["product"], "version": source["product_version"], "steps": list(steps)}
-    if g is not None:
-        p["granule"] = g["meta"]["native-id"] if "meta" in g else None
-    return p
+    if url:
+        p["url"] = url
+    return p | extra
 
 
 def _remove(paths):
@@ -94,79 +36,92 @@ def _remove(paths):
             pass
 
 
+def _window_stats(path_or_url, box, **kw):
+    """Area statistics for one band of a GeoTIFF/COG restricted to box."""
+    import rasterio
+    from rasterio.windows import from_bounds
+
+    west, south, east, north = box
+    with rasterio.open(path_or_url) as src:
+        b = src.bounds
+        win = from_bounds(max(west, b.left), max(south, b.bottom), min(east, b.right), min(north, b.top),
+                          src.transform).round_offsets().round_lengths()
+        data = src.read(1, window=win)
+        rows_idx = np.arange(win.row_off, win.row_off + win.height) + 0.5
+        lats = np.broadcast_to((src.transform.f + rows_idx * src.transform.e)[:, None], data.shape)
+        return masked_stats(data, lats, fill=src.nodata, **kw), data, lats, src.nodata
+
+
 # ---------------------------------------------------------------------------
-# GPM IMERG daily precipitation
+# GPM IMERG Late daily precipitation (GES DISC)
 # ---------------------------------------------------------------------------
 
 def gpm_imerg(source, area, since, until, skip, workdir):
     import xarray as xr
 
-    for g in _search(source, area, since, until):
-        d, _ = _granule_dates(g)
+    for d, url in direct.gesdisc_files("GPM_3IMERGDL", since, until):
         if d in skip:
             continue
-        paths = _download([g], workdir)
+        path = direct.download(url, os.path.join(workdir, os.path.basename(url)))
         try:
-            with xr.open_dataset(paths[0]) as ds:
+            with xr.open_dataset(path) as ds:
                 da = ds["precipitation"].isel(time=0).transpose("lat", "lon")
                 stats = grid_stats(da.values, da["lat"].values, da["lon"].values, area)
         finally:
-            _remove(paths)
+            _remove([path])
         stats.pop("min")
         yield d, rows_from_stats(stats, d, "precipitation", "mm/day",
-                                 _provenance(source, g, ["clip bbox+buffer", "cos-lat weighted mean"]))
+                                 _provenance(source, url, ["clip bbox+buffer", "cos-lat weighted mean"]))
 
 
 # ---------------------------------------------------------------------------
-# CHIRPS daily precipitation (public cloud-optimised GeoTIFFs)
+# CHIRPS v3 daily precipitation (public COG/GeoTIFF; final preferred, prelim recent)
 # ---------------------------------------------------------------------------
 
+def chirps3(source, area, since, until, skip, workdir):
+    files = direct.chirps3_files(since, until)
+    if not files:
+        raise RuntimeError(f"No CHIRPS v3 daily files found for {since}..{until} under {direct.CHIRPS3}")
+    for d in sorted(files):
+        if d in skip:
+            continue
+        url, kind = files[d]
+        stats, *_ = _window_stats("/vsicurl/" + url, bounds(area))
+        stats.pop("min")
+        yield d, rows_from_stats(stats, d, "precipitation", "mm/day",
+                                 _provenance(source, url, ["window read bbox+buffer", "cos-lat weighted mean"],
+                                             release=kind))
+
+
+# Legacy CHIRPS v2.0 (discontinued in favour of v3; kept for backfills of old years)
 CHIRPS_URL = "/vsicurl/https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_daily/cogs/p05/{y}/chirps-v2.0.{y}.{m:02d}.{d:02d}.cog"
 
 
 def chirps(source, area, since, until, skip, workdir):
-    import rasterio
     from rasterio.errors import RasterioIOError
-    from rasterio.windows import from_bounds
 
-    import requests
-
-    west, south, east, north = bounds(area)
-    found = missing = 0
-    last_missing = None
+    found = 0
     d = since
     while d <= until:
         if d not in skip:
             url = CHIRPS_URL.format(y=d.year, m=d.month, d=d.day)
             try:
-                with rasterio.open(url) as src:
-                    win = from_bounds(west, south, east, north, src.transform).round_offsets().round_lengths()
-                    data = src.read(1, window=win)
-                    rows_idx = np.arange(win.row_off, win.row_off + win.height) + 0.5
-                    lats = src.transform.f + rows_idx * src.transform.e
-                    stats = masked_stats(data, np.broadcast_to(lats[:, None], data.shape), fill=src.nodata)
+                stats, *_ = _window_stats(url, bounds(area))
             except RasterioIOError:
-                missing += 1
-                last_missing = url
                 d += timedelta(days=1)
-                continue  # not published yet
+                continue
             found += 1
             stats.pop("min")
-            yield d, rows_from_stats(stats, d, "precipitation", "mm/day", {
-                "product": source["product"], "version": source["product_version"],
-                "url": url.removeprefix("/vsicurl/"),
-                "steps": ["window read bbox+buffer", "cos-lat weighted mean"],
-            })
+            yield d, rows_from_stats(stats, d, "precipitation", "mm/day",
+                                     _provenance(source, url.removeprefix("/vsicurl/"),
+                                                 ["window read bbox+buffer", "cos-lat weighted mean"]))
         d += timedelta(days=1)
-    if missing and not found:
-        # Every day missing means the path is wrong or the product stopped, not latency.
-        http = last_missing.removeprefix("/vsicurl/")
-        status = requests.head(http, timeout=30, allow_redirects=True).status_code if http.startswith("http") else "n/a"
-        raise RuntimeError(f"No CHIRPS files for {since}..{until}; last tried {http} -> HTTP {status}")
+    if not found and since < until - timedelta(days=7):
+        raise RuntimeError(f"No CHIRPS v2 files for {since}..{until}; v2 is discontinued, use chirps3")
 
 
 # ---------------------------------------------------------------------------
-# GLDAS-2.2 CLSM daily: soil moisture, groundwater, air temperature
+# GLDAS-2.2 CLSM daily: soil moisture, groundwater, air temperature (GES DISC)
 # ---------------------------------------------------------------------------
 
 GLDAS_VARS = [
@@ -181,35 +136,52 @@ GLDAS_VARS = [
 def gldas_clsm(source, area, since, until, skip, workdir):
     import xarray as xr
 
-    for g in _search(source, area, since, until):
-        d, _ = _granule_dates(g)
+    for d, url in direct.gesdisc_files("GLDAS_CLSM025_DA1_D", since, until):
         if d in skip:
             continue
-        paths = _download([g], workdir)
+        path = direct.download(url, os.path.join(workdir, os.path.basename(url)))
         rows = []
         try:
-            with xr.open_dataset(paths[0]) as ds:
+            with xr.open_dataset(path) as ds:
                 for nc_var, var, unit, offset in GLDAS_VARS:
                     da = ds[nc_var].isel(time=0)
                     stats = grid_stats(da.values, da["lat"].values, da["lon"].values, area, offset=offset)
                     rows += rows_from_stats(stats, d, var, unit,
-                                            _provenance(source, g, ["clip bbox+buffer", "cos-lat weighted mean"]))
+                                            _provenance(source, url, ["clip bbox+buffer", "cos-lat weighted mean"]))
         finally:
-            _remove(paths)
+            _remove([path])
         yield d, rows
 
 
 # ---------------------------------------------------------------------------
-# GRACE/GRACE-FO mascons: one granule holds every month
+# GRACE/GRACE-FO mascons: one granule holds every month (CMR + earthaccess)
 # ---------------------------------------------------------------------------
 
+def _cmr_search(source, area, since, until):
+    import time
+
+    import earthaccess
+
+    for attempt in range(4):
+        try:
+            return earthaccess.search_data(short_name=source["product"], version=source["product_version"],
+                                           temporal=(since.isoformat(), until.isoformat()),
+                                           bounding_box=bounds(area))
+        except Exception as e:
+            if attempt == 3:
+                raise RuntimeError(f"CMR search for {source['product']} failed (NASA CMR outage?): {e}") from e
+            time.sleep(10 * 2**attempt)
+
+
 def grace_mascon(source, area, since, until, skip, workdir):
+    import earthaccess
     import xarray as xr
 
-    granules = _search(source, area, date(2002, 4, 1), until)
+    granules = _cmr_search(source, area, date(2002, 4, 1), until)
     if not granules:
         return
-    paths = _download(granules[-1:], workdir)
+    direct.token()  # logs in through earthaccess as a side effect
+    paths = earthaccess.download(granules[-1:], workdir, show_progress=False)
     try:
         with xr.open_dataset(paths[0]) as ds:
             da = ds["lwe_thickness"]
@@ -219,49 +191,56 @@ def grace_mascon(source, area, since, until, skip, workdir):
                     continue
                 stats = grid_stats(da.isel(time=i).values, da["lat"].values, da["lon"].values, area)
                 yield d, rows_from_stats(stats, d, "water_storage_anomaly", "cm",
-                                         _provenance(source, granules[-1], ["clip bbox+buffer", "cos-lat weighted mean"]))
+                                         _provenance(source, None, ["clip bbox+buffer", "cos-lat weighted mean"],
+                                                     granule=os.path.basename(paths[0])))
     finally:
         _remove(paths)
 
 
 # ---------------------------------------------------------------------------
-# MODIS (HDF4)
+# MODIS via LAADS (HDF4)
 # ---------------------------------------------------------------------------
+
+def _laads_dates(product, since, until, skip):
+    for year in range(since.year, until.year + 1):
+        for doy in direct.laads_days(product, year):
+            d = direct.doy_to_date(year, doy)
+            if since <= d <= until and d not in skip:
+                yield d, year, doy
+
 
 def modis_ndvi(source, area, since, until, skip, workdir):
     from pyhdf.SD import SD, SDC
 
     lats = 90 - 0.025 - 0.05 * np.arange(3600)
     lons = -180 + 0.025 + 0.05 * np.arange(7200)
-    for g in _search(source, area, since, until):
-        d, end = _granule_dates(g)
-        if d in skip:
+    for d, year, doy in _laads_dates("MOD13C1", since, until, skip):
+        urls = direct.laads_files("MOD13C1", year, doy)
+        if not urls:
             continue
-        paths = _download([g], workdir)
+        path = direct.download(urls[0], os.path.join(workdir, os.path.basename(urls[0])))
         try:
-            hdf = SD(paths[0], SDC.READ)
+            hdf = SD(path, SDC.READ)
             raw = hdf.select("CMG 0.05 Deg 16 days NDVI")[:]
             hdf.end()
         finally:
-            _remove(paths)
+            _remove([path])
         stats = grid_stats(raw, lats, lons, area, scale=1e-4, valid_range=(-2000, 10000))
         yield d, rows_from_stats(stats, d, "ndvi", "index",
-                                 _provenance(source, g, ["clip bbox+buffer", "scale 1e-4", "cos-lat weighted mean"]),
-                                 period_end=end)
+                                 _provenance(source, urls[0], ["clip bbox+buffer", "scale 1e-4", "cos-lat weighted mean"]),
+                                 period_end=d + timedelta(days=15))
 
 
 def modis_et(source, area, since, until, skip, workdir):
     from pyhdf.SD import SD, SDC
 
     west, south, east, north = bounds(area)
-    by_date = defaultdict(list)
-    for g in _search(source, area, since, until):
-        d, end = _granule_dates(g)
-        if d not in skip:
-            by_date[(d, end)].append(g)
-
-    for (d, end), granules in sorted(by_date.items()):
-        paths = _download(granules, workdir)
+    tiles = direct.modis_tiles((west, south, east, north))
+    for d, year, doy in _laads_dates("MOD16A2", since, until, skip):
+        urls = direct.laads_files("MOD16A2", year, doy, tiles)
+        if not urls:
+            continue
+        paths = [direct.download(u, os.path.join(workdir, os.path.basename(u))) for u in urls]
         values, lat_parts = [], []
         try:
             for p in paths:
@@ -278,8 +257,8 @@ def modis_et(source, area, since, until, skip, workdir):
         stats = masked_stats(np.concatenate(values), np.concatenate(lat_parts), scale=0.1, valid_range=(0, 32700))
         yield d, rows_from_stats(stats, d, "evapotranspiration", "mm/8-day",
                                  _provenance(source, None, ["mosaic tiles", "clip bbox+buffer", "scale 0.1",
-                                                            "cos-lat weighted mean"]) | {"tiles": len(paths)},
-                                 period_end=end)
+                                                            "cos-lat weighted mean"], tiles=tiles),
+                                 period_end=d + timedelta(days=7))
 
 
 # ---------------------------------------------------------------------------
@@ -314,36 +293,24 @@ ASTER_DATE = date(2019, 8, 5)  # ASTGTM v003 release
 
 
 def aster_dem(source, area, since, until, skip, workdir):
-    import rasterio
-    from rasterio.windows import from_bounds
-
     if ASTER_DATE in skip:
         return
-    west, south, east, north = bounds(area)
-    import earthaccess
-
-    granules = earthaccess.search_data(short_name=source["product"], version=source["product_version"],
-                                       bounding_box=(west, south, east, north))
+    box = bounds(area)
     acc = _Accumulator()
-    for g in granules:
-        paths = _download([g], workdir)
+    n = 0
+    for url in direct.aster_tiles(box):
+        path = direct.download(url, os.path.join(workdir, os.path.basename(url)))
+        if path is None:
+            continue  # tile does not exist (sea)
         try:
-            for p in paths:
-                if not p.endswith("_dem.tif"):
-                    continue
-                with rasterio.open(p) as src:
-                    b = src.bounds
-                    win = from_bounds(max(west, b.left), max(south, b.bottom), min(east, b.right),
-                                      min(north, b.top), src.transform).round_offsets().round_lengths()
-                    data = src.read(1, window=win)
-                    rows_idx = np.arange(win.row_off, win.row_off + win.height) + 0.5
-                    lats = np.broadcast_to((src.transform.f + rows_idx * src.transform.e)[:, None], data.shape)
-                    acc.add(data, lats, data != src.nodata if src.nodata is not None else np.ones_like(data, bool))
+            _, data, lats, nodata = _window_stats(path, box)
+            acc.add(data, lats, data != nodata if nodata is not None else np.ones_like(data, bool))
+            n += 1
         finally:
-            _remove(paths)
+            _remove([path])
     yield ASTER_DATE, rows_from_stats(acc.stats(), ASTER_DATE, "elevation", "m",
                                       _provenance(source, None, ["mosaic 1° tiles", "clip bbox+buffer",
-                                                                 "cos-lat weighted mean"]) | {"tiles": len(granules)})
+                                                                 "cos-lat weighted mean"], tiles=n))
 
 
 def _class_fractions(classes, lats, d, variable_prefix, provenance, top=None, ignore=()):
@@ -404,28 +371,15 @@ HWSD_DATE = date(2023, 1, 1)  # HWSD v2.0 release year
 
 def hwsd(source, area, since, until, skip, workdir):
     import rasterio
-    import requests
-    from rasterio.windows import from_bounds
 
     if HWSD_DATE in skip:
         return
     url = os.environ.get("HWSD_URL", HWSD_URL)
-    target = os.path.join(workdir, "hwsd.zip")
-    with requests.get(url, stream=True, timeout=600) as r:
-        r.raise_for_status()
-        with open(target, "wb") as f:
-            for chunk in r.iter_content(1 << 20):
-                f.write(chunk)
+    target = direct.download(url, os.path.join(workdir, "hwsd.zip"), nasa=False)
     try:
         with zipfile.ZipFile(target) as z:
             bil = next(n for n in z.namelist() if n.lower().endswith(".bil"))
-        west, south, east, north = bounds(area)
-        with rasterio.open(f"/vsizip/{target}/{bil}") as src:
-            win = from_bounds(west, south, east, north, src.transform).round_offsets().round_lengths()
-            data = src.read(1, window=win)
-            rows_idx = np.arange(win.row_off, win.row_off + win.height) + 0.5
-            lats = np.broadcast_to((src.transform.f + rows_idx * src.transform.e)[:, None], data.shape)
-            nodata = src.nodata
+        _, data, lats, nodata = _window_stats(f"/vsizip/{target}/{bil}", bounds(area))
         yield HWSD_DATE, _class_fractions(data, lats, HWSD_DATE, "smu",
                                           {"product": "HWSD", "version": "2.0", "url": url,
                                            "steps": ["window read bbox+buffer", "top-20 soil mapping unit fractions"]},
@@ -437,6 +391,7 @@ def hwsd(source, area, since, until, skip, workdir):
 # Source key -> (adapter, lookback days, needs Earthdata login)
 ADAPTERS = {
     "gpm_imerg": (gpm_imerg, 10, True),
+    "chirps3": (chirps3, 400, False),
     "chirps": (chirps, 75, False),
     "gldas_clsm": (gldas_clsm, 180, True),
     "grace_mascon": (grace_mascon, 365, True),

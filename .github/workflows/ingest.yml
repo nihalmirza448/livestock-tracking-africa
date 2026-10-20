@@ -14,16 +14,34 @@ on:
         required: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sources: ${{ steps.pick.outputs.sources }}
+    steps:
+      - id: pick
+        env:
+          INPUT_SOURCES: ${{ github.event.inputs.sources }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ -n "$INPUT_SOURCES" ]; then
+            list=$(echo "$INPUT_SOURCES" | tr -d ' ' | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd,)
+          elif [ "$SCHEDULE" = "0 3 1 * *" ]; then
+            list='"aster_dem","cci_landcover","hwsd","grace_mascon"'
+          else
+            list='"gpm_imerg","chirps3","gldas_clsm","modis_ndvi","modis_et"'
+          fi
+          echo "sources=[$list]" >> "$GITHUB_OUTPUT"
+          echo "Running: [$list]"
+
   ingest:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        source: ${{ fromJSON(
-          github.event.inputs.sources && format('["{0}"]', github.event.inputs.sources) ||
-          github.event.schedule == '0 3 1 * *' && '["aster_dem","cci_landcover","hwsd","grace_mascon"]' ||
-          '["gpm_imerg","chirps","gldas_clsm","modis_ndvi","modis_et"]') }}
+        source: ${{ fromJSON(needs.plan.outputs.sources) }}
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
@@ -38,13 +56,4 @@ jobs:
           cache: pip
           cache-dependency-path: ingest/requirements.txt
       - run: pip install -r ingest/requirements.txt
-      - name: Check data servers
-        continue-on-error: true
-        run: |
-          curl -s -o /dev/null -w "CMR anonymous search: %{http_code}\n" \
-            "https://cmr.earthdata.nasa.gov/search/granules.json?short_name=GPM_3IMERGDL&page_size=1"
-          curl -s -o /dev/null -w "CHIRPS v2 daily COG index: %{http_code}\n" \
-            "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_daily/cogs/p05/$(date +%Y)/"
-          curl -s -o /dev/null -w "CHIRPS v3 index: %{http_code}\n" \
-            "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/"
       - run: python -m ingest.run --sources "${{ matrix.source }}" ${{ github.event.inputs.since && format('--since {0}', github.event.inputs.since) || '' }}

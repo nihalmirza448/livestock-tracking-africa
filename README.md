@@ -17,18 +17,24 @@ schema for field app data, telemetry with consent (P0-4), science outputs (P0-5)
 The registry lives in the `data_sources` table, and `/[lang]/sources` shows each source's
 latest data and last run.
 
-| Key | Product | Variables stored | Auth |
-| --- | --- | --- | --- |
-| `gpm_imerg` | GPM IMERG Late daily (GPM_3IMERGDL v07) | precipitation | Earthdata |
-| `chirps` | CHIRPS v2.0 daily COGs (fallback rainfall) | precipitation | none |
-| `gldas_clsm` | GLDAS-2.2 CLSM daily (GLDAS_CLSM025_DA1_D) | surface and root-zone soil moisture, groundwater, air temperature | Earthdata |
-| `grace_mascon` | GRACE/GRACE-FO JPL mascon RL06.3 | water storage anomaly | Earthdata |
-| `modis_ndvi` | MOD13C1 v061 (0.05°, 16-day) | NDVI | Earthdata |
-| `modis_et` | MOD16A2 v061 (500 m, 8-day) | evapotranspiration | Earthdata |
-| `aster_dem` | ASTGTM v003 | elevation | Earthdata |
-| `cci_landcover` | C3S/ESA CCI land cover v2.1.1 | land cover class fractions | CDS API key |
-| `hwsd` | HWSD v2.0 raster | soil mapping unit fractions | none |
-| `cfsr` | CFSR (ended 2017) | registered only, disabled | — |
+| Key | Product | Variables stored | Fetched from | Auth |
+| --- | --- | --- | --- | --- |
+| `gpm_imerg` | GPM IMERG Late daily (GPM_3IMERGDL v07) | precipitation | GES DISC directory listing | Earthdata |
+| `chirps3` | CHIRPS v3.0 daily, `sat` disaggregation (fallback rainfall) | precipitation | CHC directory listing (final, then prelim) | none |
+| `gldas_clsm` | GLDAS-2.2 CLSM daily (GLDAS_CLSM025_DA1_D) | surface and root-zone soil moisture, groundwater, air temperature | GES DISC directory listing | Earthdata |
+| `grace_mascon` | GRACE/GRACE-FO JPL mascon RL06.3 | water storage anomaly | CMR search + earthaccess | Earthdata |
+| `modis_ndvi` | MOD13C1 v061 (0.05°, 16-day) | NDVI | LAADS archive listing | Earthdata |
+| `modis_et` | MOD16A2 v061 (500 m, 8-day) | evapotranspiration | LAADS archive listing | Earthdata |
+| `aster_dem` | ASTGTM v003 | elevation | LP DAAC cloud, deterministic tile URLs | Earthdata |
+| `cci_landcover` | C3S/ESA CCI land cover v2.1.1 | land cover class fractions | Copernicus CDS API | CDS API key |
+| `hwsd` | HWSD v2.0 raster | soil mapping unit fractions | FAO S3 | none |
+| `chirps` | CHIRPS v2.0 daily (discontinued Jan 2025; disabled) | precipitation | CHC | none |
+| `cfsr` | CFSR (ended 2017; disabled) | — | — | — |
+
+NASA's CMR search service has been returning server errors, so every daily NASA product is
+located through the archive's own listing instead (`ingest/direct.py`). Only GRACE still
+needs CMR. `python ingest/diagnose.py` (or the *Diagnose data servers* workflow) prints what
+each server currently serves.
 
 Every stored value is an area statistic (cos-latitude weighted mean, min, max, valid
 fraction) for the pilot area plus its buffer. Each value records its dataset version, its
