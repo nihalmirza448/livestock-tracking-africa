@@ -25,16 +25,23 @@ def _search(source, area, since, until):
     import earthaccess
 
     # Searching needs no login; logging in first attaches a token, and a bad
-    # token makes CMR answer with a bare internal error.
-    try:
-        return earthaccess.search_data(
-            short_name=source["product"],
-            version=source["product_version"],
-            temporal=(since.isoformat(), until.isoformat()),
-            bounding_box=bounds(area),
-        )
-    except Exception as e:
-        raise RuntimeError(f"CMR search for {source['product']} v{source['product_version']} failed: {e}") from e
+    # token makes CMR answer with a bare internal error. 5xx errors are retried.
+    import time
+
+    for attempt in range(4):
+        try:
+            return earthaccess.search_data(
+                short_name=source["product"],
+                version=source["product_version"],
+                temporal=(since.isoformat(), until.isoformat()),
+                bounding_box=bounds(area),
+            )
+        except Exception as e:
+            if attempt == 3:
+                raise RuntimeError(
+                    f"CMR search for {source['product']} v{source['product_version']} failed: {e}"
+                ) from e
+            time.sleep(10 * 2**attempt)
 
 
 _logged_in = False

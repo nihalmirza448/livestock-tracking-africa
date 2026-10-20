@@ -38,4 +38,13 @@ jobs:
           cache: pip
           cache-dependency-path: ingest/requirements.txt
       - run: pip install -r ingest/requirements.txt
+      - name: Check data servers
+        continue-on-error: true
+        run: |
+          curl -s -o /dev/null -w "CMR anonymous search: %{http_code}\n" \
+            "https://cmr.earthdata.nasa.gov/search/granules.json?short_name=GPM_3IMERGDL&page_size=1"
+          curl -s -o /dev/null -w "CHIRPS v2 daily COG index: %{http_code}\n" \
+            "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_daily/cogs/p05/$(date +%Y)/"
+          curl -s -o /dev/null -w "CHIRPS v3 index: %{http_code}\n" \
+            "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/"
       - run: python -m ingest.run --sources "${{ matrix.source }}" ${{ github.event.inputs.since && format('--since {0}', github.event.inputs.since) || '' }}
