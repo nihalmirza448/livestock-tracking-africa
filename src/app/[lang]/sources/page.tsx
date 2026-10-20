@@ -1,4 +1,5 @@
-import { getSources } from "@/lib/data";
+import { NotConfigured } from "@/components/NotConfigured";
+import { getSources, isConfigured } from "@/lib/data";
 import { isLocale, t } from "@/lib/i18n";
 
 export const revalidate = 600;
@@ -13,6 +14,7 @@ export default async function Sources({ params }: { params: Promise<{ lang: stri
   const { lang } = await params;
   if (!isLocale(lang)) return null;
   const m = t(lang);
+  if (!isConfigured) return <NotConfigured />;
   const sources = await getSources();
 
   return (

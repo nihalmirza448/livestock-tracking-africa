@@ -1,6 +1,7 @@
 import { AreaMapLoader } from "@/components/AreaMapLoader";
 import { Sparkline } from "@/components/Sparkline";
-import { INDICATORS, ageDays, getArea, getSeries, getSources, type Indicator } from "@/lib/data";
+import { NotConfigured } from "@/components/NotConfigured";
+import { INDICATORS, ageDays, isConfigured, getArea, getSeries, getSources, type Indicator } from "@/lib/data";
 import { isLocale, t, type Locale, type Messages } from "@/lib/i18n";
 
 export const revalidate = 1800;
@@ -24,6 +25,7 @@ export default async function Overview({ params }: { params: Promise<{ lang: str
   const { lang } = await params;
   if (!isLocale(lang)) return null;
   const m = t(lang);
+  if (!isConfigured) return <NotConfigured />;
   const [area, sources, cards] = await Promise.all([getArea(), getSources(), Promise.all(INDICATORS.map(loadIndicator))]);
 
   return (

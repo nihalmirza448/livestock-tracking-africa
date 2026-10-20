@@ -60,6 +60,11 @@ export type PilotArea = {
 
 const supabase = () => createPublicClient();
 
+// False when the Supabase env vars are missing, e.g. not set for this Vercel environment.
+export const isConfigured = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+);
+
 export async function getSeries(source: string, variable: string): Promise<Obs[]> {
   const { data, error } = await supabase()
     .from("eo_observations")
