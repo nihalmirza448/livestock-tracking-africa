@@ -125,11 +125,13 @@ def chirps(source, area, since, until, skip, workdir):
 # ---------------------------------------------------------------------------
 
 GLDAS_VARS = [
-    # (netCDF variable, stored variable, unit, offset)
-    ("SoilMoist_S_tavg", "soil_moisture_surface", "kg/m2", 0.0),
-    ("SoilMoist_RZ_tavg", "soil_moisture_rootzone", "kg/m2", 0.0),
-    ("GWS_tavg", "groundwater_storage", "mm", 0.0),
-    ("Tair_f_tavg", "air_temperature", "degC", -273.15),
+    # (netCDF variable, stored variable, unit, offset, required)
+    # The CLSM data-assimilation product carries land states only: no air temperature.
+    ("SoilMoist_S_tavg", "soil_moisture_surface", "kg/m2", 0.0, True),
+    ("SoilMoist_RZ_tavg", "soil_moisture_rootzone", "kg/m2", 0.0, True),
+    ("GWS_tavg", "groundwater_storage", "mm", 0.0, True),
+    ("TWS_tavg", "total_water_storage", "mm", 0.0, False),
+    ("AvgSurfT_tavg", "surface_temperature", "degC", -273.15, False),
 ]
 
 
@@ -143,7 +145,12 @@ def gldas_clsm(source, area, since, until, skip, workdir):
         rows = []
         try:
             with xr.open_dataset(path) as ds:
-                for nc_var, var, unit, offset in GLDAS_VARS:
+                missing = [v for v, _, _, _, req in GLDAS_VARS if req and v not in ds]
+                if missing:
+                    raise RuntimeError(f"{os.path.basename(url)} lacks {missing}; has {sorted(ds.data_vars)}")
+                for nc_var, var, unit, offset, _ in GLDAS_VARS:
+                    if nc_var not in ds:
+                        continue
                     da = ds[nc_var].isel(time=0)
                     stats = grid_stats(da.values, da["lat"].values, da["lon"].values, area, offset=offset)
                     rows += rows_from_stats(stats, d, var, unit,

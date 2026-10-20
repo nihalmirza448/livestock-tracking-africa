@@ -109,14 +109,15 @@ def test_gldas_converts_temperature_and_skips_stored():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "gldas.nc4")
         _nc_global(p, "SoilMoist_S_tavg", 10.0, 0.25, -60, time="2026-08-01",
-                   extra={"SoilMoist_RZ_tavg": 200.0, "GWS_tavg": 500.0, "Tair_f_tavg": 303.15})
+                   extra={"SoilMoist_RZ_tavg": 200.0, "GWS_tavg": 500.0, "AvgSurfT_tavg": 303.15})
         u1, u2 = "https://x/2026/08/GLDAS_CLSM025_DA1_D.A20260801.022.nc4", "https://x/2026/08/GLDAS_CLSM025_DA1_D.A20260802.022.nc4"
         direct.gesdisc_files = lambda product, since, until: [(date(2026, 8, 1), u1), (date(2026, 8, 2), u2)]
         stub_downloads({u1: p, u2: p})
         out = list(adapters.gldas_clsm(src("gldas_clsm"), AREA, date(2026, 5, 1), date(2026, 9, 1), {date(2026, 8, 2)}, d))
         assert [o[0] for o in out] == [date(2026, 8, 1)]
-        t = next(r for r in out[0][1] if r["variable"] == "air_temperature" and r["stat"] == "mean")
+        t = next(r for r in out[0][1] if r["variable"] == "surface_temperature" and r["stat"] == "mean")
         assert abs(t["value"] - 30.0) < 1e-4 and t["unit"] == "degC"
+        assert not any(r["variable"] == "total_water_storage" for r in out[0][1])  # optional var absent -> skipped
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ const dict = {
     water_storage_anomaly: "Water storage anomaly (GRACE)",
     evapotranspiration: "Evapotranspiration",
     air_temperature: "Air temperature",
+    surface_temperature: "Land surface temperature",
     elevation: "Elevation",
   },
   ar: {
@@ -76,6 +77,7 @@ const dict = {
     water_storage_anomaly: "شذوذ مخزون المياه (GRACE)",
     evapotranspiration: "التبخر النتحي",
     air_temperature: "درجة حرارة الهواء",
+    surface_temperature: "درجة حرارة سطح الأرض",
     elevation: "الارتفاع",
   },
 } as const;

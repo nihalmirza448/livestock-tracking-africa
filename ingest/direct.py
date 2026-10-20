@@ -24,6 +24,7 @@ urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 UA = {"User-Agent": "slewcis-ingest/1.0"}
 NASA_HOSTS = (".nasa.gov", ".usgs.gov", ".earthdata.nasa.gov")
 _token = None
+_netrc_session = None
 
 
 def _retry(fn, attempts=4):
@@ -51,6 +52,30 @@ def token():
             raise RuntimeError("Earthdata login failed: check EARTHDATA_USERNAME / EARTHDATA_PASSWORD")
         _token = auth.token["access_token"]
     return _token
+
+
+def netrc_session():
+    """Cookie session that completes the classic Earthdata redirect login via ~/.netrc.
+
+    LAADS does not accept bearer tokens on downloads; it bounces to URS, which
+    takes basic auth. requests re-applies .netrc credentials on that redirect.
+    """
+    global _netrc_session
+    if _netrc_session is None:
+        u, p = os.environ.get("EARTHDATA_USERNAME"), os.environ.get("EARTHDATA_PASSWORD")
+        if not (u and p):
+            raise RuntimeError("EARTHDATA_USERNAME / EARTHDATA_PASSWORD not set")
+        path = os.path.expanduser("~/.netrc")
+        entry = f"machine urs.earthdata.nasa.gov login {u} password {p}\n"
+        existing = open(path).read() if os.path.exists(path) else ""
+        if "urs.earthdata.nasa.gov" not in existing:
+            with open(path, "a") as f:
+                f.write(entry)
+            os.chmod(path, 0o600)
+        s = requests.Session()
+        s.headers.update(UA)
+        _netrc_session = s
+    return _netrc_session
 
 
 def _is_nasa(url):
@@ -93,11 +118,20 @@ def list_dir(url, pattern, nasa=False):
     return _retry(get)
 
 
-def download(url, dest, nasa=True):
-    """Stream url to dest. Returns None on 404. Fails loudly on an HTML login page."""
+def download(url, dest, nasa=True, auth="bearer"):
+    """Stream url to dest. Returns None on 404. Fails loudly on an HTML login page.
+
+    auth: "bearer" (token, redirects followed by hand), "netrc" (URS redirect
+    login with cookies) or "none".
+    """
+
+    def open_stream():
+        if auth == "netrc":
+            return netrc_session().get(url, stream=True, timeout=900, allow_redirects=True)
+        return _get(url, nasa and auth != "none", stream=True, timeout=900)
 
     def get():
-        with _get(url, nasa, stream=True, timeout=900) as r:
+        with open_stream() as r:
             if r.status_code == 404:
                 return None
             r.raise_for_status()
@@ -188,17 +222,22 @@ def lpcloud_url(laads_url):
 
 
 def download_modis(url, dest):
-    """Download a MODIS granule: LAADS first, LP DAAC cloud if LAADS hands back a login page."""
+    """Download a MODIS granule: LAADS (netrc login) first, LP DAAC cloud (bearer) if that fails."""
     try:
-        return download(url, dest)
-    except RuntimeError as e:
-        if "HTML page" not in str(e):
-            raise
-        alt = lpcloud_url(url)
-        path = download(alt, dest)
-        if path is None:
-            raise RuntimeError(f"LAADS returned a login page for {url} and LP DAAC cloud has no {alt}") from e
-        return path
+        path = download(url, dest, auth="netrc")
+        if path is not None:
+            return path
+        first_error = f"LAADS has no {url}"
+    except (RuntimeError, requests.HTTPError) as e:
+        first_error = f"LAADS failed for {url}: {e}"
+    alt = lpcloud_url(url)
+    try:
+        path = download(alt, dest, auth="bearer")
+    except (RuntimeError, requests.HTTPError) as e:
+        raise RuntimeError(f"{first_error}; LP DAAC cloud also failed for {alt}: {e}") from e
+    if path is None:
+        raise RuntimeError(f"{first_error}; LP DAAC cloud has no {alt}")
+    return path
 
 
 def doy_to_date(year, doy):

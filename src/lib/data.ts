@@ -19,7 +19,7 @@ export const INDICATORS: Indicator[] = [
   { variable: "groundwater_storage", source: "gldas_clsm", maxAgeDays: 120, digits: 0 },
   { variable: "water_storage_anomaly", source: "grace_mascon", maxAgeDays: 150, digits: 1 },
   { variable: "evapotranspiration", source: "modis_et", maxAgeDays: 30, digits: 1 },
-  { variable: "air_temperature", source: "gldas_clsm", maxAgeDays: 120, digits: 1 },
+  { variable: "surface_temperature", source: "gldas_clsm", maxAgeDays: 120, digits: 1 },
 ];
 
 export type Obs = { obs_date: string; value: number | null; unit: string };
