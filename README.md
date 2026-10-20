@@ -55,7 +55,7 @@ note are places to publish results, not data sources, so they aren't ingested.
 ## Local development
 
 ```bash
-cp .env.example .env.local   # fill in the two NEXT_PUBLIC_ values
+cp .env.example .env.local   # fill in SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY
 npm install && npm run dev   # http://localhost:3000 -> /ar
 
 python -m venv .venv && .venv/bin/pip install -r ingest/requirements.txt

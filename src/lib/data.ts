@@ -1,3 +1,4 @@
+import { supabaseKey, supabaseUrl } from "@/lib/supabase/env";
 import { createPublicClient } from "@/lib/supabase/public";
 
 export const AREA_ID = "south_kordofan";
@@ -61,9 +62,7 @@ export type PilotArea = {
 const supabase = () => createPublicClient();
 
 // False when the Supabase env vars are missing, e.g. not set for this Vercel environment.
-export const isConfigured = Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-);
+export const isConfigured = Boolean(supabaseUrl && supabaseKey);
 
 export async function getSeries(source: string, variable: string): Promise<Obs[]> {
   const { data, error } = await supabase()
